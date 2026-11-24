@@ -256,7 +256,6 @@ export default function RegisterWizard({
       name: nameInput.trim() || (t?.defaultNewUserName || 'Nuevo Puzzler'),
       birthDate: birthDateInput,
       email: normalizedEmail,
-      password: regPassInput,
       city: cleanCityName,
       cp: '',
       lat: selectedCoords.lat,
@@ -267,7 +266,7 @@ export default function RegisterWizard({
       acceptedTermsAt: new Date().toISOString(),
     };
 
-    onRegisterUser?.(newUser);
+    onRegisterUser?.(newUser, regPassInput);
     onCompleteAuth?.(newUser, { isNewRegistration: true });
   };
 

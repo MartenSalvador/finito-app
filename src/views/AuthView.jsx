@@ -6,6 +6,7 @@ import Frase from '../assets/Finito-frase.png';
 
 export default function AuthView({
   users = [],
+  credentialsByEmail = {},
   onRegisterUser,
   setCurrentUser,
   setIsLoggedIn,
@@ -102,6 +103,7 @@ export default function AuthView({
         {authMode === 'login' ? (
           <AuthLoginForm
             users={users}
+            credentialsByEmail={credentialsByEmail}
             onCompleteAuth={handleCompleteAuth}
             onSwitchToRegisterWithEmail={handleSwitchToRegisterWithEmail}
             t={t}

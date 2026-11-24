@@ -41,12 +41,6 @@ export default function PuzzleDetailModal({
         : [FALLBACK_IMG];
 
   useEffect(() => {
-    setActiveImageIndex(0);
-    setAvatarError(false);
-    setCopied(false);
-  }, [puzzle?.id]);
-
-  useEffect(() => {
     if (!puzzle) return;
 
     const previousOverflow = document.body.style.overflow;

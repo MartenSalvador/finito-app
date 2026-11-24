@@ -4,7 +4,6 @@ export const INITIAL_USERS = [
     id: 'u1',
     name: 'Martín S.',
     email: 'marti@puzzle.com',
-    password: '123456',
     city: 'Delmenhorst',
     cp: '27753',
     lat: 53.0526,
@@ -17,7 +16,6 @@ export const INITIAL_USERS = [
     id: 'u2',
     name: 'Ornella S.',
     email: 'ornella@puzzle.com',
-    password: '123456',
     city: 'Delmenhorst',
     cp: '27751',
     lat: 53.0480,
@@ -115,3 +113,13 @@ export const INITIAL_USERS = [
     avatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?auto=format&fit=crop&w=200&q=80'
   }
 ];
+
+export const INITIAL_DEMO_CREDENTIALS = INITIAL_USERS.reduce(
+  (credentials, user) => {
+    if (typeof user.email === 'string') {
+      credentials[user.email.trim().toLowerCase()] = '123456';
+    }
+    return credentials;
+  },
+  {}
+);

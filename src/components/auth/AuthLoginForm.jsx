@@ -3,6 +3,7 @@ import { AlertCircle, Eye, EyeOff, UserPlus } from 'lucide-react';
 
 export default function AuthLoginForm({
   users = [],
+  credentialsByEmail = {},
   onCompleteAuth,
   onSwitchToRegisterWithEmail,
   t,
@@ -31,7 +32,7 @@ export default function AuthLoginForm({
       return;
     }
 
-    if (foundUser.password && foundUser.password !== passInput) {
+    if (credentialsByEmail[normalizedEmail] !== passInput) {
       setLoginError(t?.wrongPasswordError || 'Contraseña incorrecta.');
       return;
     }

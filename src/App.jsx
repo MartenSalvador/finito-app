@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { translations } from './translations';
 
-import { INITIAL_USERS } from './data/mockUsers';
+import { INITIAL_USERS, INITIAL_DEMO_CREDENTIALS } from './data/mockUsers';
 import { INITIAL_PUZZLES } from './data/mockPuzzles';
 import { INITIAL_TRADES } from './data/mockTrades';
 import { INITIAL_COMPLETED_PUZZLES } from './data/mockCompletedPuzzles';
@@ -26,6 +26,9 @@ export default function App() {
   const t = translations[lang] || translations.es;
 
   const [users, setUsers] = useState(INITIAL_USERS);
+  const [demoCredentialsByEmail, setDemoCredentialsByEmail] = useState(
+    INITIAL_DEMO_CREDENTIALS
+  );
   const [currentUser, setCurrentUser] = useState(null);
   const [activeTab, setActiveTab] = useState('explore');
   const [previousTab, setPreviousTab] = useState('explore');
@@ -151,6 +154,7 @@ export default function App() {
     setCurrentUser,
     setUsers,
     setUserBadges,
+    setDemoCredentialsByEmail,
     setFavorites,
     activeTab,
     setActiveTab,
@@ -285,6 +289,15 @@ export default function App() {
   const handleDeleteAccount = () => {
     if (!currentUser?.id) return;
 
+    const email = currentUser.email?.trim().toLowerCase();
+    if (email) {
+      setDemoCredentialsByEmail((prev) => {
+        const next = { ...prev };
+        delete next[email];
+        return next;
+      });
+    }
+
     deleteAccountAndData({
       userId: currentUser.id,
       setUsers,
@@ -407,6 +420,7 @@ export default function App() {
               initialMode={authModalMode}
               promptReason={authPromptReason}
               users={users}
+              credentialsByEmail={demoCredentialsByEmail}
               onRegisterUser={handleRegisterUser}
               setCurrentUser={setCurrentUser}
               setIsLoggedIn={setIsLoggedIn}

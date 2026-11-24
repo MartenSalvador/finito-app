@@ -7,6 +7,7 @@ export function useAuthAndOnboarding({
   setCurrentUser,
   setUsers,
   setUserBadges,
+  setDemoCredentialsByEmail,
   setFavorites,
   activeTab,
   setActiveTab,
@@ -120,8 +121,12 @@ export function useAuthAndOnboarding({
   }, [setCurrentUser, setTradeModalPuzzle, onResetTradesSession, setActiveTab]);
 
   const handleRegisterUser = useCallback(
-    (newUser) => {
+    (newUser, password) => {
       setUsers((prev) => [...prev, newUser]);
+      setDemoCredentialsByEmail((prev) => ({
+        ...prev,
+        [newUser.email.trim().toLowerCase()]: password,
+      }));
       setUserBadges((prev) => ({
         ...prev,
         [newUser.id]: [],
@@ -131,7 +136,7 @@ export function useAuthAndOnboarding({
         [newUser.id]: [],
       }));
     },
-    [setUsers, setUserBadges, setFavorites]
+    [setUsers, setDemoCredentialsByEmail, setUserBadges, setFavorites]
   );
 
   const handleTabChange = useCallback(
