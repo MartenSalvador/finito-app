@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@import 'leaflet/dist/leaflet.css';
+
+.map-dark-mode .leaflet-tile {
+  filter: saturate(0.65) hue-rotate(235deg) brightness(1.03) contrast(0.96);
+}
+
+/* Para que los popups mantengan los textos legibles y armonicen con el tema claro/lila */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background-color: #ffffff !important;
+  color: #18181b !important;
+  border: 1px solid #e5e0f5 !important;
+  border-radius: 20px !important;
+  box-shadow: 0 12px 28px -8px rgba(91, 61, 245, 0.16), 0 4px 12px -4px rgba(24, 24, 27, 0.06) !important;
+}
