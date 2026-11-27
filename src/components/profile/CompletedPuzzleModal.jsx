@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Share2, Trash2, X } from 'lucide-react';
+import { Check, Loader2, Share2, Trash2, X } from 'lucide-react';
 
 export default function CompletedPuzzleModal({
   puzzle,
@@ -8,17 +8,18 @@ export default function CompletedPuzzleModal({
   t,
 }) {
   const [copied, setCopied] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!puzzle || !onClose) return;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !isDeleting) {
         onClose();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [puzzle, onClose]);
+  }, [puzzle, onClose, isDeleting]);
 
   if (!puzzle) return null;
 
@@ -53,9 +54,23 @@ export default function CompletedPuzzleModal({
     }
   };
 
+  const handleDeleteClick = async () => {
+    if (!onDelete || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await onDelete(puzzle.id);
+      onClose?.();
+    } catch (err) {
+      console.error('Error al eliminar el armado:', err);
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div
-      onClick={onClose}
+      onClick={() => {
+        if (!isDeleting) onClose?.();
+      }}
       className="fixed inset-0 z-50 bg-[#18181B]/45 backdrop-blur-xs p-4 flex items-center justify-center animate-fade-in"
     >
       <div
@@ -83,9 +98,10 @@ export default function CompletedPuzzleModal({
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
+              disabled={isDeleting}
               onClick={handleShare}
               title={copied ? t?.linkCopied || 'Enlace copiado' : t?.share || 'Compartir'}
-              className={`px-2.5 py-2 rounded-2xl border text-xs font-bold transition-all duration-200 active:scale-90 inline-flex items-center gap-1.5 ${
+              className={`px-2.5 py-2 rounded-2xl border text-xs font-bold transition-all duration-200 active:scale-90 inline-flex items-center gap-1.5 disabled:opacity-60 ${
                 copied
                   ? 'bg-[#5B3DF5] text-white border-[#5B3DF5]'
                   : 'bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] hover:text-[#5B3DF5] border-[#E5E0F5]'
@@ -107,21 +123,24 @@ export default function CompletedPuzzleModal({
             {onDelete && (
               <button
                 type="button"
-                onClick={() => {
-                  onDelete(puzzle.id);
-                  onClose();
-                }}
-                className="p-2 bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#5B3DF5] rounded-2xl border border-[#E5E0F5] transition-all duration-200 active:scale-90"
+                disabled={isDeleting}
+                onClick={handleDeleteClick}
+                className="p-2 bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#5B3DF5] rounded-2xl border border-[#E5E0F5] transition-all duration-200 active:scale-90 disabled:opacity-60"
                 title={t?.deleteCompletedBtn || 'Eliminar'}
               >
-                <Trash2 className="w-4 h-4" />
+                {isDeleting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Trash2 className="w-4 h-4" />
+                )}
               </button>
             )}
             <button
               type="button"
+              disabled={isDeleting}
               onClick={onClose}
               aria-label={t?.closeModal || 'Cerrar'}
-              className="p-2 bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] rounded-2xl border border-[#E5E0F5] transition-all duration-200 active:scale-90"
+              className="p-2 bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] rounded-2xl border border-[#E5E0F5] transition-all duration-200 active:scale-90 disabled:opacity-60"
             >
               <X className="w-4 h-4" />
             </button>

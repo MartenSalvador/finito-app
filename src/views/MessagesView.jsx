@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { doc, updateDoc } from 'firebase/firestore';
 import {
   MessageSquare,
   ArrowLeft,
@@ -12,6 +13,7 @@ import {
   X,
   Archive,
 } from 'lucide-react';
+import { db } from '../firebase/config';
 import { INITIAL_USERS } from '../data/mockUsers';
 
 const FALLBACK_AVATAR_IMG =
@@ -29,6 +31,12 @@ const REPORT_REASONS = [
 
 function getCurrentTimestamp() {
   return Date.now();
+}
+
+function isFirestoreProposalId(id) {
+  if (!id) return false;
+  const str = String(id);
+  return !str.startsWith('prop-') && !str.startsWith('chat_');
 }
 
 function CounterpartAvatar({ name, avatar }) {
@@ -262,14 +270,24 @@ export default function MessagesView({
       time: t?.justNow || 'Hace un momento',
     };
 
+    const nextMessages = [...(activeChat.messages || []), newMsg];
+
     setProposals((prev) =>
       prev.map((prop) =>
         prop.id === activeChat.id
-          ? { ...prop, messages: [...(prop.messages || []), newMsg] }
+          ? { ...prop, messages: nextMessages }
           : prop
       )
     );
     setChatMessageInput('');
+
+    if (isFirestoreProposalId(activeChat.id)) {
+      updateDoc(doc(db, 'proposals', activeChat.id), {
+        messages: nextMessages,
+      }).catch((err) =>
+        console.error('Error guardando mensaje en Firestore:', err)
+      );
+    }
   };
 
   const handleConfirmTrade = () => {
@@ -323,12 +341,27 @@ export default function MessagesView({
       );
     }
 
+    if (isFirestoreProposalId(activeChat.id)) {
+      updateDoc(doc(db, 'proposals', activeChat.id), {
+        confirmations: nextConfirmations,
+        messages: nextProposal.messages,
+        ...(bothConfirmed
+          ? {
+              status: 'completed',
+              completedAt: nextProposal.completedAt,
+            }
+          : {}),
+      }).catch((err) =>
+        console.error('Error guardando confirmación de intercambio:', err)
+      );
+    }
+
     if (bothConfirmed && !wasAlreadyCompleted && onConfirmTrade) {
       onConfirmTrade(nextProposal);
     }
   };
 
-  const handleConfirmBlockUser = () => {
+const handleConfirmBlockUser = () => {
     if (!activeChat || !activeCounterpart) return;
 
     if (activeCounterpart.id) {
@@ -352,6 +385,8 @@ export default function MessagesView({
       time: t?.justNow || 'Hace un momento',
     };
 
+    const nextMessages = [...(activeChat.messages || []), blockMsg];
+
     if (setProposals) {
       setProposals((prev) =>
         prev.map((prop) =>
@@ -360,10 +395,20 @@ export default function MessagesView({
                 ...prop,
                 blocked: true,
                 blockedBy: currentUser?.id || true,
-                messages: [...(prop.messages || []), blockMsg],
+                messages: nextMessages,
               }
             : prop
         )
+      );
+    }
+
+    if (isFirestoreProposalId(activeChat.id)) {
+      updateDoc(doc(db, 'proposals', activeChat.id), {
+        blocked: true,
+        blockedBy: currentUser?.id || true,
+        messages: nextMessages,
+      }).catch((err) =>
+        console.error('Error guardando bloqueo en propuesta:', err)
       );
     }
 
@@ -392,6 +437,8 @@ export default function MessagesView({
       time: t?.justNow || 'Hace un momento',
     };
 
+    const nextMessages = [...(activeChat.messages || []), unblockMsg];
+
     if (setProposals) {
       setProposals((prev) =>
         prev.map((prop) =>
@@ -400,10 +447,20 @@ export default function MessagesView({
                 ...prop,
                 blocked: false,
                 blockedBy: null,
-                messages: [...(prop.messages || []), unblockMsg],
+                messages: nextMessages,
               }
             : prop
         )
+      );
+    }
+
+    if (isFirestoreProposalId(activeChat.id)) {
+      updateDoc(doc(db, 'proposals', activeChat.id), {
+        blocked: false,
+        blockedBy: null,
+        messages: nextMessages,
+      }).catch((err) =>
+        console.error('Error guardando desbloqueo en propuesta:', err)
       );
     }
 
@@ -440,6 +497,8 @@ export default function MessagesView({
       time: t?.justNow || 'Hace un momento',
     };
 
+    const nextMessages = [...(activeChat.messages || []), reportMsg];
+
     if (setProposals) {
       setProposals((prev) =>
         prev.map((prop) =>
@@ -447,10 +506,19 @@ export default function MessagesView({
             ? {
                 ...prop,
                 reported: true,
-                messages: [...(prop.messages || []), reportMsg],
+                messages: nextMessages,
               }
             : prop
         )
+      );
+    }
+
+    if (isFirestoreProposalId(activeChat.id)) {
+      updateDoc(doc(db, 'proposals', activeChat.id), {
+        reported: true,
+        messages: nextMessages,
+      }).catch((err) =>
+        console.error('Error guardando reporte en propuesta:', err)
       );
     }
 
@@ -611,7 +679,7 @@ export default function MessagesView({
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
+<div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() =>

@@ -1,0 +1,226 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isParticipant(data) {
+      return signedIn()
+        && (data.senderId == request.auth.uid
+          || data.receiverId == request.auth.uid);
+    }
+
+    function ownsPuzzle(puzzleId, uid) {
+      return puzzleId is string
+        && exists(/databases/$(database)/documents/puzzles/$(puzzleId))
+        && get(/databases/$(database)/documents/puzzles/$(puzzleId)).data.userId == uid;
+    }
+
+    function proposalMatchesTrade() {
+      let tradePath = /databases/$(database)/documents/trades/$(request.resource.data.tradeId);
+      return request.resource.data.tradeId is string
+        && exists(tradePath)
+        && get(tradePath).data.senderId == request.resource.data.senderId
+        && get(tradePath).data.receiverId == request.resource.data.receiverId
+        && get(tradePath).data.status in ['pending', 'accepted'];
+    }
+
+    function validPublicProfile() {
+      return request.resource.data.keys().hasOnly([
+        'name',
+        'bio',
+        'city',
+        'cp',
+        'lat',
+        'lon',
+        'rating',
+        'tradesCount',
+        'avatar',
+        'badges'
+      ]);
+    }
+
+    match /users/{uid} {
+      allow read, create, update, delete: if signedIn()
+        && request.auth.uid == uid;
+    }
+
+    match /publicProfiles/{uid} {
+      allow read: if true;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && validPublicProfile();
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /puzzles/{puzzleId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'userId',
+          'userName',
+          'city',
+          'cp',
+          'lat',
+          'lon',
+          'distanceKm',
+          'title',
+          'pieces',
+          'status',
+          'images',
+          'image',
+          'description',
+          'createdAt'
+        ]);
+      allow update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && (request.resource == null
+          || request.resource.data.userId == resource.data.userId);
+    }
+
+    match /completedPuzzles/{completedId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'userId',
+          'title',
+          'pieces',
+          'image',
+          'completedAt',
+          'note',
+          'createdAt'
+        ]);
+      allow update, delete: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && (request.resource == null
+          || request.resource.data.userId == resource.data.userId);
+    }
+
+    match /trades/{tradeId} {
+      allow read: if isParticipant(resource.data);
+      allow create: if signedIn()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.receiverId is string
+        && request.resource.data.receiverId != request.auth.uid
+        && exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.receiverId))
+        && ownsPuzzle(request.resource.data.requestedPuzzleId, request.resource.data.receiverId)
+        && ownsPuzzle(request.resource.data.offeredPuzzleId, request.auth.uid)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly([
+          'senderId',
+          'senderName',
+          'senderAvatar',
+          'receiverId',
+          'receiverName',
+          'requestedPuzzleId',
+          'requestedPuzzleTitle',
+          'offeredPuzzleId',
+          'offeredPuzzleTitle',
+          'message',
+          'status',
+          'createdAt',
+          'expiresAt',
+          'serverCreatedAt'
+        ]);
+      allow update, delete: if signedIn()
+        && isParticipant(resource.data)
+        && (request.resource == null
+          || (request.resource.data.senderId == resource.data.senderId
+            && request.resource.data.receiverId == resource.data.receiverId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status',
+              'chatProposalId',
+              'rejectedAt',
+              'expired',
+              'blockedByUser',
+              'completedAt'
+            ])));
+    }
+
+    match /proposals/{proposalId} {
+      allow read: if isParticipant(resource.data);
+      allow create: if signedIn()
+        && isParticipant(request.resource.data)
+        && request.resource.data.senderId != request.resource.data.receiverId
+        && proposalMatchesTrade()
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.keys().hasOnly([
+          'id',
+          'tradeId',
+          'senderId',
+          'senderName',
+          'senderAvatar',
+          'receiverId',
+          'receiverName',
+          'receiverAvatar',
+          'targetOwnerId',
+          'targetOwnerName',
+          'requestedPuzzleId',
+          'offeredPuzzleId',
+          'puzzleTargetTitle',
+          'puzzleOfferedTitle',
+          'status',
+          'read',
+          'createdAt',
+          'serverCreatedAt',
+          'messages',
+          'confirmations'
+        ]);
+      allow update, delete: if signedIn()
+        && isParticipant(resource.data)
+        && (request.resource == null
+          || (request.resource.data.senderId == resource.data.senderId
+            && request.resource.data.receiverId == resource.data.receiverId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'read',
+              'status',
+              'completedAt',
+              'messages',
+              'confirmations',
+              'blocked',
+              'blockedBy',
+              'reported'
+            ])
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['messages'])
+              || (request.resource.data.messages is list
+                && resource.data.messages is list
+                && request.resource.data.messages.size() == resource.data.messages.size() + 1
+                && request.resource.data.messages[request.resource.data.messages.size() - 1].senderId
+                  in [request.auth.uid, 'system']))
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['confirmations'])
+              || (request.resource.data.confirmations is map
+                && resource.data.confirmations is map
+                && request.resource.data.confirmations.diff(resource.data.confirmations)
+                  .affectedKeys().hasOnly([request.auth.uid])))));
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'reporterId',
+          'reporterName',
+          'targetUserId',
+          'targetUserName',
+          'proposalId',
+          'tradeId',
+          'reason',
+          'reasonLabel',
+          'note',
+          'createdAt',
+          'serverCreatedAt',
+          'status'
+        ]);
+      allow read, delete: if signedIn()
+        && resource.data.reporterId == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

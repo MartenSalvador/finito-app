@@ -1,4 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase/config';
+import { toPublicProfile } from '../utils/profileHelpers';
 
 const PROTECTED_TABS = new Set(['publish', 'favorites', 'messages', 'profile', 'trades']);
 
@@ -7,7 +11,6 @@ export function useAuthAndOnboarding({
   setCurrentUser,
   setUsers,
   setUserBadges,
-  setDemoCredentialsByEmail,
   setFavorites,
   activeTab,
   setActiveTab,
@@ -19,6 +22,7 @@ export function useAuthAndOnboarding({
   t,
 }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authModalMode, setAuthModalMode] = useState(null); // null | 'login' | 'register'
   const [authPromptReason, setAuthPromptReason] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
@@ -49,6 +53,50 @@ export function useAuthAndOnboarding({
         'Cuando una propuesta se acepta, se abre el chat para coordinar el intercambio fácilmente.',
     },
   ];
+
+  // Restaura la sesión si el usuario ya estaba logueado al recargar la página
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setCurrentUser(null);
+        setIsLoggedIn(false);
+        setIsAuthLoading(false);
+        return;
+      }
+
+      try {
+        const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userSnap.exists()) {
+          const profileData = { id: firebaseUser.uid, ...userSnap.data() };
+          try {
+            await setDoc(
+              doc(db, 'publicProfiles', firebaseUser.uid),
+              toPublicProfile(profileData),
+              { merge: true }
+            );
+          } catch (error) {
+            console.error('Error sincronizando el perfil público:', error);
+          }
+          setCurrentUser(profileData);
+          setIsLoggedIn(true);
+        } else {
+          // Fallback mínimo si Auth existe pero el doc de Firestore aún se está creando
+          setCurrentUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            name: firebaseUser.displayName || '',
+          });
+          setIsLoggedIn(true);
+        }
+      } catch (error) {
+        console.error('Error cargando perfil desde Firestore:', error);
+      } finally {
+        setIsAuthLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [setCurrentUser]);
 
   const openAuthModal = useCallback((mode = 'login', reason = '', action = null) => {
     setAuthModalMode(mode);
@@ -109,34 +157,44 @@ export function useAuthAndOnboarding({
     [currentUser, setCurrentUser, pendingAction]
   );
 
-  const handleLogout = useCallback(() => {
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setShowOnboarding(false);
-    setOnboardingStep(0);
-    setPendingAction(null);
-    setTradeModalPuzzle?.(null);
-    onResetTradesSession?.();
-    setActiveTab('explore');
+  const handleLogout = useCallback(async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('Error al cerrar sesión en Firebase:', error);
+    } finally {
+      setIsLoggedIn(false);
+      setCurrentUser(null);
+      setShowOnboarding(false);
+      setOnboardingStep(0);
+      setPendingAction(null);
+      setTradeModalPuzzle?.(null);
+      onResetTradesSession?.();
+      setActiveTab('explore');
+    }
   }, [setCurrentUser, setTradeModalPuzzle, onResetTradesSession, setActiveTab]);
 
+  // Al registrarse con Firebase, el documento en Firestore se guarda en el paso de registro
+  // y acá sincronizamos el estado local inmediato de la UI.
   const handleRegisterUser = useCallback(
-    (newUser, password) => {
-      setUsers((prev) => [...prev, newUser]);
-      setDemoCredentialsByEmail((prev) => ({
-        ...prev,
-        [newUser.email.trim().toLowerCase()]: password,
-      }));
+    (newUser) => {
+      setUsers((prev) => {
+        const exists = prev.some((u) => u.id === newUser.id);
+        const publicUser = { id: newUser.id, ...toPublicProfile(newUser) };
+        return exists
+          ? prev.map((u) => (u.id === newUser.id ? { ...u, ...publicUser } : u))
+          : [...prev, publicUser];
+      });
       setUserBadges((prev) => ({
         ...prev,
-        [newUser.id]: [],
+        [newUser.id]: prev?.[newUser.id] || [],
       }));
       setFavorites((prev) => ({
         ...prev,
-        [newUser.id]: [],
+        [newUser.id]: prev?.[newUser.id] || [],
       }));
     },
-    [setUsers, setDemoCredentialsByEmail, setUserBadges, setFavorites]
+    [setUsers, setUserBadges, setFavorites]
   );
 
   const handleTabChange = useCallback(
@@ -192,6 +250,7 @@ export function useAuthAndOnboarding({
 
   return {
     isLoggedIn,
+    isAuthLoading,
     setIsLoggedIn,
     authModalMode,
     authPromptReason,

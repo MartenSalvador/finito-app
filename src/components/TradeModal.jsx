@@ -41,6 +41,8 @@ export default function TradeModal({
 
   const [selectedPuzzleId, setSelectedPuzzleId] = useState(() => myPuzzles[0]?.id || '');
   const [initialMessage, setInitialMessage] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -61,10 +63,10 @@ export default function TradeModal({
     ? users.find((u) => u.id === currentUser?.id)
     : null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const offeredPuzzle = selectedPuzzle;
-    if (!offeredPuzzle) return;
+    if (!offeredPuzzle || isSubmitting) return;
 
     const trimmedMsg = initialMessage.trim();
     const senderName = currentUser?.name || senderProfile?.name || 'Usuario';
@@ -102,7 +104,19 @@ export default function TradeModal({
         : [],
     };
 
-    onPropose && onPropose(newProposal);
+    setSubmitError('');
+    setIsSubmitting(true);
+    try {
+      await onPropose?.(newProposal);
+    } catch (error) {
+      console.error('No se pudo enviar la propuesta de intercambio:', error);
+      setSubmitError(
+        t?.tradeProposalFailed ||
+          'No se pudo enviar la propuesta. Verificá que ambos rompecabezas sigan disponibles e intentá nuevamente.'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const previewImg = puzzle.images?.[0] || puzzle.image || '';
@@ -232,22 +246,31 @@ export default function TradeModal({
             </span>
           </div>
 
+          {submitError && (
+            <p role="alert" className="text-xs font-semibold text-red-700">
+              {submitError}
+            </p>
+          )}
+
           {/* Botones */}
           <div className="flex gap-2.5 pt-2">
             <button
               type="button"
               onClick={onClose}
+              disabled={isSubmitting}
               className="flex-1 bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] border border-[#E5E0F5] font-bold text-sm py-3 rounded-2xl transition-all duration-200 active:scale-95"
             >
               {t?.cancelBtn || 'Cancelar'}
             </button>
             <button
               type="submit"
-              disabled={myPuzzles.length === 0}
+              disabled={myPuzzles.length === 0 || isSubmitting}
               className="flex-1 bg-[#5B3DF5] hover:bg-[#482BD9] disabled:bg-[#E5E0F5] disabled:text-[#6B7280]/60 text-white font-bold text-sm py-3 rounded-2xl transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 shadow-2xs hover:shadow-md disabled:shadow-none disabled:active:scale-100"
             >
               <Send className="w-4 h-4" />
-              {t?.sendProposalBtn || 'Enviar propuesta'}
+              {isSubmitting
+                ? t?.sendingBtn || 'Enviando...'
+                : t?.sendProposalBtn || 'Enviar propuesta'}
             </button>
           </div>
         </form>

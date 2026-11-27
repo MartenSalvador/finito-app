@@ -1,39 +1,78 @@
-export function buildAcceptedTradeProposal(acceptedTrade, puzzles, users, currentUser = null) {
+export function buildAcceptedTradeProposal(
+  acceptedTrade,
+  puzzles = [],
+  users = [],
+  currentUser = null
+) {
   if (!acceptedTrade) return null;
 
+  const safePuzzles = Array.isArray(puzzles) ? puzzles : [];
+  const safeUsers = Array.isArray(users) ? users : [];
+
+  const requestedPuzzleId =
+    acceptedTrade.requestedPuzzleId ??
+    acceptedTrade.puzzleTargetId ??
+    acceptedTrade.requestedPuzzle?.id ??
+    null;
+
+  const offeredPuzzleId =
+    acceptedTrade.offeredPuzzleId ??
+    acceptedTrade.puzzleOfferedId ??
+    acceptedTrade.offeredPuzzle?.id ??
+    null;
+
   const requestedPuzzle =
-    puzzles.find((p) => p.id === acceptedTrade.requestedPuzzleId) ||
-    acceptedTrade.requestedPuzzle;
+    safePuzzles.find(
+      (p) => requestedPuzzleId && String(p.id) === String(requestedPuzzleId)
+    ) ||
+    acceptedTrade.requestedPuzzle ||
+    null;
+
   const offeredPuzzle =
-    puzzles.find((p) => p.id === acceptedTrade.offeredPuzzleId) ||
-    acceptedTrade.offeredPuzzle;
+    safePuzzles.find(
+      (p) => offeredPuzzleId && String(p.id) === String(offeredPuzzleId)
+    ) ||
+    acceptedTrade.offeredPuzzle ||
+    null;
 
   const rawSenderId =
-    (typeof acceptedTrade.sender === 'object' ? acceptedTrade.sender?.id : null) ||
-    acceptedTrade.senderId ||
-    acceptedTrade.fromId ||
-    offeredPuzzle?.userId ||
+    (typeof acceptedTrade.sender === 'object' ? acceptedTrade.sender?.id : null) ??
+    acceptedTrade.senderId ??
+    acceptedTrade.fromId ??
+    requestedPuzzle?.userId ??
+    requestedPuzzle?.ownerId ??
     null;
 
   const rawSenderName =
-    (typeof acceptedTrade.sender === 'string' ? acceptedTrade.sender : null) ||
-    (typeof acceptedTrade.sender === 'object' ? acceptedTrade.sender?.name : null) ||
-    acceptedTrade.senderName ||
-    acceptedTrade.fromName ||
-    acceptedTrade.userName ||
-    offeredPuzzle?.userName ||
+    (typeof acceptedTrade.sender === 'string' ? acceptedTrade.sender : null) ??
+    (typeof acceptedTrade.sender === 'object' ? acceptedTrade.sender?.name : null) ??
+    acceptedTrade.senderName ??
+    acceptedTrade.fromName ??
+    acceptedTrade.userName ??
     null;
 
-  const matchedSender = users.find(
+  const matchedSender = safeUsers.find(
     (u) =>
-      (rawSenderId && u.id === rawSenderId) ||
+      (rawSenderId && String(u.id) === String(rawSenderId)) ||
       (!rawSenderId &&
         rawSenderName &&
         u.name?.trim().toLowerCase() === rawSenderName.trim().toLowerCase())
   );
 
-  const senderId = rawSenderId || matchedSender?.id || null;
-  const senderName = rawSenderName || matchedSender?.name || 'Usuario';
+  const senderId = rawSenderId
+    ? String(rawSenderId)
+    : matchedSender?.id
+      ? String(matchedSender.id)
+      : null;
+
+  const senderName =
+    rawSenderName ||
+    matchedSender?.name ||
+    (senderId && currentUser?.id && String(currentUser.id) === senderId
+      ? currentUser?.name
+      : null) ||
+    'Usuario';
+
   const senderAvatar =
     (typeof acceptedTrade.sender === 'object' ? acceptedTrade.sender?.avatar : null) ||
     acceptedTrade.senderAvatar ||
@@ -42,24 +81,33 @@ export function buildAcceptedTradeProposal(acceptedTrade, puzzles, users, curren
     '';
 
   const rawReceiverId =
-    acceptedTrade.receiverId ||
-    acceptedTrade.recipientId ||
-    acceptedTrade.targetUserId ||
-    acceptedTrade.ownerId ||
-    requestedPuzzle?.userId ||
-    requestedPuzzle?.ownerId ||
-    currentUser?.id ||
+    acceptedTrade.receiverId ??
+    acceptedTrade.recipientId ??
+    acceptedTrade.targetUserId ??
+    acceptedTrade.ownerId ??
+    offeredPuzzle?.userId ??
+    offeredPuzzle?.ownerId ??
+    currentUser?.id ??
     null;
 
-  const matchedReceiver = users.find((u) => rawReceiverId && u.id === rawReceiverId);
+  const matchedReceiver = safeUsers.find(
+    (u) => rawReceiverId && String(u.id) === String(rawReceiverId)
+  );
 
-  const receiverId = rawReceiverId || matchedReceiver?.id || null;
+  const receiverId = rawReceiverId
+    ? String(rawReceiverId)
+    : matchedReceiver?.id
+      ? String(matchedReceiver.id)
+      : null;
+
   const receiverName =
     acceptedTrade.receiverName ||
     acceptedTrade.recipientName ||
     acceptedTrade.targetOwnerName ||
     matchedReceiver?.name ||
-    (receiverId === currentUser?.id ? currentUser?.name : null) ||
+    (receiverId && currentUser?.id && String(currentUser.id) === receiverId
+      ? currentUser?.name
+      : null) ||
     'Usuario';
 
   const receiverAvatar =
@@ -71,8 +119,14 @@ export function buildAcceptedTradeProposal(acceptedTrade, puzzles, users, curren
   const initialMessageText =
     acceptedTrade.message || acceptedTrade.messages?.[0]?.text || '';
 
+  const createdAt =
+    typeof acceptedTrade.createdAt === 'number'
+      ? acceptedTrade.createdAt
+      : Date.now();
+
   return {
     id: `prop-${Date.now()}`,
+    tradeId: acceptedTrade.id ? String(acceptedTrade.id) : null,
     senderId,
     senderName,
     senderAvatar,
@@ -81,10 +135,20 @@ export function buildAcceptedTradeProposal(acceptedTrade, puzzles, users, curren
     receiverAvatar,
     targetOwnerId: receiverId,
     targetOwnerName: receiverName,
-    puzzleTargetTitle: requestedPuzzle?.title || 'Tu rompecabezas',
-    puzzleOfferedTitle: offeredPuzzle?.title || 'Rompecabezas ofrecido',
+    requestedPuzzleId: requestedPuzzleId ? String(requestedPuzzleId) : null,
+    offeredPuzzleId: offeredPuzzleId ? String(offeredPuzzleId) : null,
+    puzzleTargetTitle:
+      requestedPuzzle?.title ||
+      acceptedTrade.requestedPuzzleTitle ||
+      acceptedTrade.puzzleTitle ||
+      'Tu rompecabezas',
+    puzzleOfferedTitle:
+      offeredPuzzle?.title ||
+      acceptedTrade.offeredPuzzleTitle ||
+      'Rompecabezas ofrecido',
     status: 'accepted',
     read: false,
+    createdAt,
     messages: initialMessageText
       ? [{ senderId, sender: senderName, text: initialMessageText, time: 'Ahora' }]
       : [],

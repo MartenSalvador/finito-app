@@ -1,4 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  addDoc,
+  arrayRemove,
+  arrayUnion,
+  collection,
+  doc,
+  serverTimestamp,
+  updateDoc,
+} from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 const BLOCKS_STORAGE_KEY = 'finito_blocked_users_v1';
 const REPORTS_STORAGE_KEY = 'finito_user_reports_v1';
@@ -20,6 +30,17 @@ function writeStorageMap(key, value) {
   } catch {
     // Ignorar errores de cuota o entorno restringido
   }
+}
+
+function isFirestoreDocId(id) {
+  if (!id) return false;
+  const str = String(id);
+  return (
+    !str.startsWith('tr_') &&
+    !str.startsWith('chat_') &&
+    !str.startsWith('rep_') &&
+    !str.startsWith('t')
+  );
 }
 
 export function useModeration({
@@ -45,6 +66,25 @@ export function useModeration({
     writeStorageMap(REPORTS_STORAGE_KEY, reportsByUser);
   }, [reportsByUser]);
 
+  // Hidrata bloqueos desde el documento del usuario en Firestore si existen
+  useEffect(() => {
+    if (!currentUser?.id || !Array.isArray(currentUser.blockedUserIds)) return;
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setBlocksByUser((prev) => {
+      const prevList = Array.isArray(prev[currentUser.id]) ? prev[currentUser.id] : [];
+      const merged = Array.from(new Set([...prevList, ...currentUser.blockedUserIds]));
+      const same =
+        prevList.length === merged.length &&
+        prevList.every((id) => merged.includes(id));
+      if (same) return prev;
+      return {
+        ...prev,
+        [currentUser.id]: merged,
+      };
+    });
+  }, [currentUser?.id, currentUser?.blockedUserIds]);
+
   const blockedUserIds = useMemo(
     () => (Array.isArray(blocksByUser[userKey]) ? blocksByUser[userKey] : []),
     [blocksByUser, userKey]
@@ -63,7 +103,7 @@ export function useModeration({
   );
 
   const blockUser = useCallback(
-    (targetUserId, contextProposal = null) => {
+    async (targetUserId, contextProposal = null) => {
       if (!targetUserId || !currentUser?.id || targetUserId === currentUser.id) {
         return;
       }
@@ -78,6 +118,10 @@ export function useModeration({
       });
 
       const now = Date.now();
+      const targetName =
+        contextProposal?.senderName ||
+        contextProposal?.receiverName ||
+        'este usuario';
       const sysMsg = {
         senderId: 'system',
         sender: 'Finito',
@@ -85,13 +129,35 @@ export function useModeration({
         text: (
           t?.userBlockedSystemMsg ||
           'Bloqueaste a {name}. Ya no podrán enviarse mensajes ni nuevas propuestas.'
-        ).replace('{name}', contextProposal?.senderName || contextProposal?.receiverName || 'este usuario'),
+        ).replace('{name}', targetName),
         time: t?.justNow || 'Hace un momento',
       };
 
       if (setTrades) {
-        setTrades((prev) =>
-          prev.map((tr) => {
+        setTrades((prev) => {
+          prev.forEach((tr) => {
+            const isPending = !tr.status || tr.status === 'pending';
+            if (!isPending) return;
+
+            const involvedUser =
+              tr.senderId === targetUserId ||
+              tr.sender?.id === targetUserId ||
+              tr.receiverId === targetUserId ||
+              tr.targetUserId === targetUserId ||
+              tr.receiver?.id === targetUserId;
+
+            if (involvedUser && isFirestoreDocId(tr.id)) {
+              updateDoc(doc(db, 'trades', tr.id), {
+                status: 'rejected',
+                blockedByUser: true,
+                rejectedAt: now,
+              }).catch((err) =>
+                console.error('Error rechazando intercambio por bloqueo:', err)
+              );
+            }
+          });
+
+          return prev.map((tr) => {
             const isPending = !tr.status || tr.status === 'pending';
             if (!isPending) return tr;
 
@@ -110,13 +176,41 @@ export function useModeration({
               blockedByUser: true,
               rejectedAt: now,
             };
-          })
-        );
+          });
+        });
       }
 
       if (setProposals) {
-        setProposals((prev) =>
-          prev.map((prop) => {
+        setProposals((prev) => {
+          prev.forEach((prop) => {
+            const involvedUser =
+              prop.senderId === targetUserId ||
+              prop.receiverId === targetUserId ||
+              prop.recipientId === targetUserId ||
+              prop.targetOwnerId === targetUserId;
+
+            if (!involvedUser) return;
+
+            const currentMsgs = Array.isArray(prop.messages) ? prop.messages : [];
+            const alreadyHasBlockMsg = currentMsgs.some(
+              (m) => m.isSystem && m.text === sysMsg.text
+            );
+            const nextMsgs = alreadyHasBlockMsg
+              ? currentMsgs
+              : [...currentMsgs, sysMsg];
+
+            if (isFirestoreDocId(prop.id)) {
+              updateDoc(doc(db, 'proposals', prop.id), {
+                blocked: true,
+                blockedBy: currentUser.id,
+                messages: nextMsgs,
+              }).catch((err) =>
+                console.error('Error actualizando chat por bloqueo:', err)
+              );
+            }
+          });
+
+          return prev.map((prop) => {
             const involvedUser =
               prop.senderId === targetUserId ||
               prop.receiverId === targetUserId ||
@@ -125,7 +219,8 @@ export function useModeration({
 
             if (!involvedUser) return prop;
 
-            const alreadyHasBlockMsg = (prop.messages || []).some(
+            const currentMsgs = Array.isArray(prop.messages) ? prop.messages : [];
+            const alreadyHasBlockMsg = currentMsgs.some(
               (m) => m.isSystem && m.text === sysMsg.text
             );
 
@@ -134,19 +229,30 @@ export function useModeration({
               blocked: true,
               blockedBy: currentUser.id,
               messages: alreadyHasBlockMsg
-                ? prop.messages || []
-                : [...(prop.messages || []), sysMsg],
+                ? currentMsgs
+                : [...currentMsgs, sysMsg],
             };
-          })
-        );
+          });
+        });
+      }
+
+      if (isFirestoreDocId(currentUser.id)) {
+        try {
+          await updateDoc(doc(db, 'users', currentUser.id), {
+            blockedUserIds: arrayUnion(targetUserId),
+          });
+        } catch (err) {
+          console.error('Error guardando bloqueo en Firestore:', err);
+        }
       }
     },
     [currentUser, setProposals, setTrades, t, userKey]
   );
 
   const unblockUser = useCallback(
-    (targetUserId) => {
+    async (targetUserId) => {
       if (!targetUserId) return;
+
       setBlocksByUser((prev) => {
         const currentList = Array.isArray(prev[userKey]) ? prev[userKey] : [];
         return {
@@ -154,18 +260,28 @@ export function useModeration({
           [userKey]: currentList.filter((id) => id !== targetUserId),
         };
       });
+
+      if (currentUser?.id && isFirestoreDocId(currentUser.id)) {
+        try {
+          await updateDoc(doc(db, 'users', currentUser.id), {
+            blockedUserIds: arrayRemove(targetUserId),
+          });
+        } catch (err) {
+          console.error('Error quitando bloqueo en Firestore:', err);
+        }
+      }
     },
-    [userKey]
+    [currentUser, userKey]
   );
 
   const reportUser = useCallback(
-    (reportPayload) => {
+    async (reportPayload) => {
       if (!reportPayload?.targetUserId && !reportPayload?.targetUserName) {
         return null;
       }
 
-      const newReport = {
-        id: `rep_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      const createdAt = reportPayload.createdAt || Date.now();
+      const baseReport = {
         reporterId: currentUser?.id || null,
         reporterName: currentUser?.name || 'Usuario',
         targetUserId: reportPayload.targetUserId || null,
@@ -175,19 +291,43 @@ export function useModeration({
         reason: reportPayload.reason || 'other',
         reasonLabel: reportPayload.reasonLabel || 'Otro motivo',
         note: (reportPayload.note || '').trim(),
-        createdAt: reportPayload.createdAt || Date.now(),
+        createdAt,
         status: 'submitted',
       };
+
+      const tempId = `rep_${createdAt}_${Math.random().toString(36).slice(2, 7)}`;
+      const optimisticReport = { id: tempId, ...baseReport };
 
       setReportsByUser((prev) => {
         const currentList = Array.isArray(prev[userKey]) ? prev[userKey] : [];
         return {
           ...prev,
-          [userKey]: [newReport, ...currentList],
+          [userKey]: [optimisticReport, ...currentList],
         };
       });
 
-      return newReport;
+      try {
+        const docRef = await addDoc(collection(db, 'reports'), {
+          ...baseReport,
+          serverCreatedAt: serverTimestamp(),
+        });
+
+        const savedReport = { id: docRef.id, ...baseReport };
+        setReportsByUser((prev) => {
+          const currentList = Array.isArray(prev[userKey]) ? prev[userKey] : [];
+          return {
+            ...prev,
+            [userKey]: currentList.map((item) =>
+              item.id === tempId ? savedReport : item
+            ),
+          };
+        });
+
+        return savedReport;
+      } catch (err) {
+        console.error('Error enviando reporte a Firestore:', err);
+        return optimisticReport;
+      }
     },
     [currentUser?.id, currentUser?.name, userKey]
   );

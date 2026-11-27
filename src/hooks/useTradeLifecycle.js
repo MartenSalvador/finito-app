@@ -1,7 +1,23 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  addDoc,
+  arrayRemove,
+  collection,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  updateDoc,
+} from 'firebase/firestore';
+import { db } from '../firebase/config';
 import { buildAcceptedTradeProposal } from '../utils/tradeHelpers';
 
 const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+
+function isFirestoreDocId(id) {
+  if (!id) return false;
+  const str = String(id);
+  return !str.startsWith('tr_') && !str.startsWith('chat_') && !str.startsWith('t');
+}
 
 export function useTradeLifecycle({
   currentUser,
@@ -35,7 +51,7 @@ export function useTradeLifecycle({
   // Vencimiento automático de propuestas pendientes tras 48 horas
   useEffect(() => {
     const expireOutdatedTrades = () => {
-      const now = Date.now();
+      const currentTs = Date.now();
       setTrades((prev) => {
         let changed = false;
         const next = prev.map((tr) => {
@@ -49,13 +65,22 @@ export function useTradeLifecycle({
                 ? tr.createdAt + FORTY_EIGHT_HOURS_MS
                 : null;
 
-          if (expiresAt && now >= expiresAt) {
+          if (expiresAt && currentTs >= expiresAt) {
             changed = true;
+            if (isFirestoreDocId(tr.id)) {
+              updateDoc(doc(db, 'trades', tr.id), {
+                status: 'rejected',
+                expired: true,
+                rejectedAt: currentTs,
+              }).catch((err) =>
+                console.error('Error marcando intercambio vencido:', err)
+              );
+            }
             return {
               ...tr,
               status: 'rejected',
               expired: true,
-              rejectedAt: now,
+              rejectedAt: currentTs,
             };
           }
           return tr;
@@ -106,7 +131,16 @@ export function useTradeLifecycle({
     : 0;
 
   const markProposalsRead = useCallback(() => {
-    setProposals((prev) => prev.map((p) => ({ ...p, read: true })));
+    setProposals((prev) => {
+      prev.forEach((p) => {
+        if (!p.read && isFirestoreDocId(p.id)) {
+          updateDoc(doc(db, 'proposals', p.id), { read: true }).catch((err) =>
+            console.error('Error marcando propuesta leída:', err)
+          );
+        }
+      });
+      return prev.map((p) => ({ ...p, read: true }));
+    });
   }, [setProposals]);
 
   const clearSelectedProposal = useCallback(() => {
@@ -118,7 +152,7 @@ export function useTradeLifecycle({
   }, []);
 
   const createTradeProposal = useCallback(
-    (newProp, targetPuzzle) => {
+    async (newProp, targetPuzzle) => {
       const targetOwnerId =
         newProp.receiverId ||
         newProp.targetOwnerId ||
@@ -127,10 +161,10 @@ export function useTradeLifecycle({
 
       if (isBlockedPair(targetOwnerId)) return;
 
-      const now = Date.now();
+      const createdTs = Date.now();
+      const expiresAt = createdTs + FORTY_EIGHT_HOURS_MS;
 
-      const normalizedTrade = {
-        id: newProp.id || `tr_${now}`,
+      const tradePayload = {
         senderId: newProp.senderId || currentUser?.id,
         senderName: newProp.senderName || currentUser?.name,
         senderAvatar: newProp.senderAvatar || currentUser?.avatar || '',
@@ -138,28 +172,55 @@ export function useTradeLifecycle({
         receiverName:
           newProp.receiverName ||
           newProp.targetOwnerName ||
-          targetPuzzle?.userName,
+          targetPuzzle?.userName ||
+          '',
         requestedPuzzleId:
           newProp.requestedPuzzleId ||
           newProp.puzzleTargetId ||
-          targetPuzzle?.id,
-        requestedPuzzle: targetPuzzle || newProp.requestedPuzzle,
-        offeredPuzzleId: newProp.offeredPuzzleId || newProp.puzzleOfferedId,
-        offeredPuzzle: newProp.offeredPuzzle,
+          targetPuzzle?.id ||
+          null,
+        requestedPuzzleTitle:
+          targetPuzzle?.title || newProp.requestedPuzzle?.title || '',
+        offeredPuzzleId: newProp.offeredPuzzleId || newProp.puzzleOfferedId || null,
+        offeredPuzzleTitle: newProp.offeredPuzzle?.title || '',
         message: newProp.message || newProp.messages?.[0]?.text || '',
         status: 'pending',
-        createdAt: now,
-        expiresAt: now + FORTY_EIGHT_HOURS_MS,
+        createdAt: createdTs,
+        expiresAt,
+        serverCreatedAt: serverTimestamp(),
       };
 
-      setTrades((prev) => [normalizedTrade, ...prev]);
+      const optimisticTrade = {
+        id: newProp.id || `tr_${createdTs}`,
+        ...tradePayload,
+        requestedPuzzle: targetPuzzle || newProp.requestedPuzzle,
+        offeredPuzzle: newProp.offeredPuzzle,
+      };
+
+      setTrades((prev) => [optimisticTrade, ...prev]);
       setActiveTab('trades');
+
+      try {
+        const docRef = await addDoc(collection(db, 'trades'), tradePayload);
+        setTrades((prev) =>
+          prev.map((tr) =>
+            tr.id === optimisticTrade.id ? { ...tr, id: docRef.id } : tr
+          )
+        );
+      } catch (error) {
+        console.error('Error guardando propuesta de intercambio en Firestore:', error);
+        setTrades((prev) =>
+          prev.filter((tr) => tr.id !== optimisticTrade.id)
+        );
+        setActiveTab('explore');
+        throw error;
+      }
     },
     [currentUser, isBlockedPair, setActiveTab, setTrades]
   );
 
   const acceptTrade = useCallback(
-    (tradeId) => {
+    async (tradeId) => {
       const acceptedTrade = trades.find((tr) => tr.id === tradeId);
       if (!acceptedTrade) return;
 
@@ -186,6 +247,20 @@ export function useTradeLifecycle({
         );
         setSelectedProposalId(existingProposal.id);
         setActiveTab('messages');
+
+        if (isFirestoreDocId(existingProposal.id)) {
+          updateDoc(doc(db, 'proposals', existingProposal.id), { read: true }).catch(
+            (err) => console.error('Error actualizando lectura de propuesta:', err)
+          );
+        }
+        if (isFirestoreDocId(tradeId)) {
+          updateDoc(doc(db, 'trades', tradeId), {
+            status: 'accepted',
+            chatProposalId: existingProposal.id,
+          }).catch((err) =>
+            console.error('Error actualizando estado de intercambio:', err)
+          );
+        }
         return;
       }
 
@@ -259,9 +334,10 @@ export function useTradeLifecycle({
         offeredPuzzle?.title ||
         'Rompecabezas ofrecido';
 
-      const newChatProposal = {
+      const tempProposalId = builtProposal?.id || `chat_${tradeId}_${Date.now()}`;
+
+      const proposalPayload = {
         ...(builtProposal || {}),
-        id: builtProposal?.id || `chat_${tradeId}_${Date.now()}`,
         tradeId,
         senderId,
         senderName,
@@ -275,6 +351,8 @@ export function useTradeLifecycle({
         puzzleOfferedTitle,
         status: 'accepted',
         read: true,
+        createdAt: Date.now(),
+        serverCreatedAt: serverTimestamp(),
         messages:
           Array.isArray(builtProposal?.messages) && builtProposal.messages.length > 0
             ? builtProposal.messages
@@ -294,16 +372,57 @@ export function useTradeLifecycle({
         },
       };
 
-      setProposals((prev) => [newChatProposal, ...prev]);
+      const optimisticProposal = {
+        id: tempProposalId,
+        ...proposalPayload,
+      };
+
+      setProposals((prev) => [optimisticProposal, ...prev]);
       setTrades((prev) =>
         prev.map((tr) =>
           tr.id === tradeId
-            ? { ...tr, status: 'accepted', chatProposalId: newChatProposal.id }
+            ? { ...tr, status: 'accepted', chatProposalId: tempProposalId }
             : tr
         )
       );
-      setSelectedProposalId(newChatProposal.id);
+      setSelectedProposalId(tempProposalId);
       setActiveTab('messages');
+
+      try {
+        const propDocRef = await addDoc(collection(db, 'proposals'), proposalPayload);
+        setProposals((prev) =>
+          prev.map((p) => (p.id === tempProposalId ? { ...p, id: propDocRef.id } : p))
+        );
+        setTrades((prev) =>
+          prev.map((tr) =>
+            tr.id === tradeId ? { ...tr, chatProposalId: propDocRef.id } : tr
+          )
+        );
+        setSelectedProposalId((prevSelected) =>
+          prevSelected === tempProposalId ? propDocRef.id : prevSelected
+        );
+
+        if (isFirestoreDocId(tradeId)) {
+          await updateDoc(doc(db, 'trades', tradeId), {
+            status: 'accepted',
+            chatProposalId: propDocRef.id,
+          });
+        }
+      } catch (error) {
+        console.error('Error aceptando intercambio en Firestore:', error);
+        setProposals((prev) =>
+          prev.filter((p) => p.id !== tempProposalId)
+        );
+        setTrades((prev) =>
+          prev.map((tr) =>
+            tr.id === tradeId
+              ? { ...tr, status: 'pending', chatProposalId: null }
+              : tr
+          )
+        );
+        setSelectedProposalId(null);
+        setActiveTab('trades');
+      }
     },
     [
       trades,
@@ -319,15 +438,28 @@ export function useTradeLifecycle({
     ]
   );
 
-  const rejectTrade = useCallback((tradeId) => {
-    setTrades((prev) =>
-      prev.map((tr) =>
-        tr.id === tradeId
-          ? { ...tr, status: 'rejected', rejectedAt: Date.now() }
-          : tr
-      )
-    );
-  }, [setTrades]);
+  const rejectTrade = useCallback(
+    async (tradeId) => {
+      const rejectedAt = Date.now();
+      setTrades((prev) =>
+        prev.map((tr) =>
+          tr.id === tradeId ? { ...tr, status: 'rejected', rejectedAt } : tr
+        )
+      );
+
+      if (!isFirestoreDocId(tradeId)) return;
+
+      try {
+        await updateDoc(doc(db, 'trades', tradeId), {
+          status: 'rejected',
+          rejectedAt,
+        });
+      } catch (error) {
+        console.error('Error rechazando intercambio en Firestore:', error);
+      }
+    },
+    [setTrades]
+  );
 
   const openChatFromTrade = useCallback(
     (trade) => {
@@ -339,6 +471,11 @@ export function useTradeLifecycle({
           prev.map((p) => (p.id === matchedProposal.id ? { ...p, read: true } : p))
         );
         setSelectedProposalId(matchedProposal.id);
+        if (isFirestoreDocId(matchedProposal.id)) {
+          updateDoc(doc(db, 'proposals', matchedProposal.id), { read: true }).catch(
+            (err) => console.error('Error marcando chat como leído:', err)
+          );
+        }
       }
       setActiveTab('messages');
     },
@@ -346,7 +483,7 @@ export function useTradeLifecycle({
   );
 
   const completeTrade = useCallback(
-    (proposalOrTrade) => {
+    async (proposalOrTrade) => {
       if (!proposalOrTrade) return;
 
       const relatedTrade = trades.find(
@@ -384,27 +521,29 @@ export function useTradeLifecycle({
         relatedTrade?.offeredPuzzle?.title ||
         null;
 
-      const idsToRemove = new Set([requestedId, offeredId].filter(Boolean));
-
-      setPuzzles((prev) =>
-        prev.filter((puzzle) => {
-          if (idsToRemove.has(puzzle.id)) return false;
-
-          if (
-            idsToRemove.size === 0 &&
-            ((targetTitle &&
-              puzzle.title?.trim().toLowerCase() === targetTitle.trim().toLowerCase() &&
-              puzzle.userId === proposalOrTrade.receiverId) ||
-              (offeredTitle &&
-                puzzle.title?.trim().toLowerCase() === offeredTitle.trim().toLowerCase() &&
-                puzzle.userId === proposalOrTrade.senderId))
-          ) {
-            return false;
-          }
-
+      const matchedPuzzles = puzzles.filter((puzzle) => {
+        if (requestedId && puzzle.id === requestedId) return true;
+        if (offeredId && puzzle.id === offeredId) return true;
+        if (
+          !requestedId &&
+          !offeredId &&
+          ((targetTitle &&
+            puzzle.title?.trim().toLowerCase() === targetTitle.trim().toLowerCase() &&
+            puzzle.userId === proposalOrTrade.receiverId) ||
+            (offeredTitle &&
+              puzzle.title?.trim().toLowerCase() === offeredTitle.trim().toLowerCase() &&
+              puzzle.userId === proposalOrTrade.senderId))
+        ) {
           return true;
-        })
-      );
+        }
+        return false;
+      });
+
+      const idsToRemove = new Set(matchedPuzzles.map((p) => p.id));
+      if (requestedId) idsToRemove.add(requestedId);
+      if (offeredId) idsToRemove.add(offeredId);
+
+      setPuzzles((prev) => prev.filter((puzzle) => !idsToRemove.has(puzzle.id)));
 
       if (idsToRemove.size > 0) {
         setFavorites((prev) => {
@@ -421,12 +560,12 @@ export function useTradeLifecycle({
         });
       }
 
+      const completedAt = proposalOrTrade.completedAt || Date.now();
+
       if (relatedTrade?.id) {
         setTrades((prev) =>
           prev.map((tr) =>
-            tr.id === relatedTrade.id
-              ? { ...tr, status: 'completed', completedAt: Date.now() }
-              : tr
+            tr.id === relatedTrade.id ? { ...tr, status: 'completed', completedAt } : tr
           )
         );
       }
@@ -435,16 +574,49 @@ export function useTradeLifecycle({
         prev.map((prop) =>
           prop.id === proposalOrTrade.id ||
           (relatedTrade?.id && prop.tradeId === relatedTrade.id)
-            ? {
-                ...prop,
-                status: 'completed',
-                completedAt: prop.completedAt || Date.now(),
-              }
+            ? { ...prop, status: 'completed', completedAt }
             : prop
         )
       );
+
+      // Persiste cambios en Firestore
+      for (const puzzleId of idsToRemove) {
+        if (!String(puzzleId).startsWith('p')) {
+          deleteDoc(doc(db, 'puzzles', puzzleId)).catch((err) =>
+            console.error('Error eliminando puzzle intercambiado en Firestore:', err)
+          );
+        }
+      }
+
+      if (currentUser?.id && idsToRemove.size > 0) {
+        for (const puzzleId of idsToRemove) {
+          updateDoc(doc(db, 'users', currentUser.id), {
+            favorites: arrayRemove(puzzleId),
+          }).catch(() => {});
+        }
+      }
+
+      if (relatedTrade?.id && isFirestoreDocId(relatedTrade.id)) {
+        updateDoc(doc(db, 'trades', relatedTrade.id), {
+          status: 'completed',
+          completedAt,
+        }).catch((err) =>
+          console.error('Error marcando trade como completado:', err)
+        );
+      }
+
+      const targetProposalId =
+        proposalOrTrade.id || relatedTrade?.chatProposalId || null;
+      if (targetProposalId && isFirestoreDocId(targetProposalId)) {
+        updateDoc(doc(db, 'proposals', targetProposalId), {
+          status: 'completed',
+          completedAt,
+        }).catch((err) =>
+          console.error('Error marcando propuesta como completada:', err)
+        );
+      }
     },
-    [trades, setPuzzles, setFavorites, setProposals, setTrades]
+    [currentUser, puzzles, trades, setPuzzles, setFavorites, setProposals, setTrades]
   );
 
   return {

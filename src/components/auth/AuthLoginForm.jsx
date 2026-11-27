@@ -1,43 +1,88 @@
 import { useState } from 'react';
-import { AlertCircle, Eye, EyeOff, UserPlus } from 'lucide-react';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { AlertCircle, Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
+import { auth, db } from '../../firebase/config';
 
 export default function AuthLoginForm({
   users = [],
-  credentialsByEmail = {},
   onCompleteAuth,
   onSwitchToRegisterWithEmail,
   t,
 }) {
-  const [emailInput, setEmailInput] = useState('marti@puzzle.com');
-  const [passInput, setPassInput] = useState('123456');
+  const [emailInput, setEmailInput] = useState('');
+  const [passInput, setPassInput] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [userNotFound, setUserNotFound] = useState(false);
+  const [canCreateAccount, setCanCreateAccount] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     setLoginError('');
-    setUserNotFound(false);
+    setCanCreateAccount(false);
+    setIsSubmitting(true);
 
     const normalizedEmail = emailInput.trim().toLowerCase();
-    const foundUser = users.find(
-      (u) => u.email?.trim().toLowerCase() === normalizedEmail
-    );
 
-    if (!foundUser) {
-      setUserNotFound(true);
-      setLoginError(
-        t?.userNotFoundError || 'No encontramos una cuenta con ese correo.'
+    try {
+      const credential = await signInWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        passInput
       );
-      return;
-    }
+      const firebaseUser = credential.user;
 
-    if (credentialsByEmail[normalizedEmail] !== passInput) {
-      setLoginError(t?.wrongPasswordError || 'Contraseña incorrecta.');
-      return;
-    }
+      // Cargamos el perfil desde Firestore; si aún no existe en la colección, armamos fallback
+      const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+      const existingLocalUser = users.find(
+        (u) => u.id === firebaseUser.uid || u.email?.trim().toLowerCase() === normalizedEmail
+      );
 
-    onCompleteAuth?.(foundUser);
+      const userProfile = userSnap.exists()
+        ? { id: firebaseUser.uid, ...userSnap.data() }
+        : existingLocalUser || {
+            id: firebaseUser.uid,
+            email: firebaseUser.email || normalizedEmail,
+            name: firebaseUser.displayName || normalizedEmail.split('@')[0],
+          };
+
+      onCompleteAuth?.(userProfile);
+    } catch (error) {
+      const code = error?.code || '';
+
+      if (code === 'auth/user-not-found') {
+        setCanCreateAccount(true);
+        setLoginError(
+          t?.userNotFoundError || 'No encontramos una cuenta con ese correo.'
+        );
+      } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        // Firebase unifica user-not-found y wrong-password en invalid-credential por seguridad;
+        // ofrecer crear cuenta cubre ambos casos sin frustrar al usuario.
+        setCanCreateAccount(true);
+        setLoginError(
+          t?.invalidCredentialsError ||
+            'Correo o contraseña incorrectos. Si aún no tenés cuenta, podés crearla ahora.'
+        );
+      } else if (code === 'auth/invalid-email') {
+        setLoginError(
+          t?.invalidEmailError || 'Ingresá un correo electrónico válido.'
+        );
+      } else if (code === 'auth/too-many-requests') {
+        setLoginError(
+          t?.tooManyRequestsError ||
+            'Demasiados intentos fallidos. Esperá unos minutos e intentá de nuevo.'
+        );
+      } else {
+        setLoginError(
+          t?.genericAuthError || 'No pudimos iniciar sesión. Intentá nuevamente.'
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -50,7 +95,7 @@ export default function AuthLoginForm({
             </span>
             <span>{loginError}</span>
           </div>
-          {userNotFound && (
+          {canCreateAccount && (
             <button
               type="button"
               onClick={() =>
@@ -75,15 +120,17 @@ export default function AuthLoginForm({
         <input
           type="email"
           autoComplete="email"
+          placeholder={t?.emailPlaceholder || 'tu@correo.com'}
           value={emailInput}
+          disabled={isSubmitting}
           onChange={(e) => {
             setEmailInput(e.target.value);
             if (loginError) {
               setLoginError('');
-              setUserNotFound(false);
+              setCanCreateAccount(false);
             }
           }}
-          className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl px-4 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200"
+          className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl px-4 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200 disabled:opacity-60"
           required
         />
       </div>
@@ -98,25 +145,27 @@ export default function AuthLoginForm({
             autoComplete="current-password"
             placeholder={t?.passwordPlaceholder || 'Tu contraseña'}
             value={passInput}
+            disabled={isSubmitting}
             onChange={(e) => {
               setPassInput(e.target.value);
               if (loginError) {
                 setLoginError('');
-                setUserNotFound(false);
+                setCanCreateAccount(false);
               }
             }}
-            className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200"
+            className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200 disabled:opacity-60"
             required
           />
           <button
             type="button"
             onClick={() => setShowLoginPassword((prev) => !prev)}
+            disabled={isSubmitting}
             aria-label={
               showLoginPassword
                 ? t?.hidePasswordAria || 'Ocultar contraseña'
                 : t?.showPasswordAria || 'Ver contraseña'
             }
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors"
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors disabled:opacity-50"
           >
             {showLoginPassword ? (
               <EyeOff className="w-4 h-4" />
@@ -129,9 +178,11 @@ export default function AuthLoginForm({
 
       <button
         type="submit"
-        className="w-full bg-[#5B3DF5] hover:bg-[#482BD9] text-white font-bold py-3 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow-md active:scale-[0.98] text-sm mt-2"
+        disabled={isSubmitting}
+        className="w-full bg-[#5B3DF5] hover:bg-[#482BD9] text-white font-bold py-3 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow-md active:scale-[0.98] text-sm mt-2 inline-flex items-center justify-center gap-2 disabled:opacity-65 disabled:pointer-events-none"
       >
-        {t?.loginBtn || 'Ingresar'}
+        {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+        <span>{t?.loginBtn || 'Ingresar'}</span>
       </button>
     </form>
   );

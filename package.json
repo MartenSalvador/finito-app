@@ -7,9 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:rules": "firebase --config firebase.json emulators:exec --only auth,firestore,storage --project demo-finito \"node scripts/test-firestore-rules.js && node scripts/test-storage-rules.js\"",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {
+    "firebase": "^13.4.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.73.0",
     "react": "^19.3.1",
@@ -19,6 +23,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/postcss": "^4.3.5",
+    "@testing-library/jest-dom": "^8.0.0",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
@@ -27,8 +33,13 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.33",
     "tailwindcss": "^4.3.5",
-    "vite": "^8.3.6"
+    "vite": "^8.3.6",
+    "vitest": "^5.1.2"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.7"
   }
 }

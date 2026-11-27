@@ -25,6 +25,9 @@ export default function ProfileAccountSection({
   const [activePanel, setActivePanel] = useState(null); // 'terms' | 'privacy' | 'feedback' | null
   const [confirmingDeleteAccount, setConfirmingDeleteAccount] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   // Estado del formulario de sugerencias o consultas
   const [feedbackType, setFeedbackType] = useState('suggestion');
@@ -90,24 +93,41 @@ export default function ProfileAccountSection({
     setActivePanel(null);
     setFeedbackError('');
     setDeleteConfirmText('');
+    setDeletePassword('');
+    setDeleteError('');
     setConfirmingDeleteAccount(true);
   };
 
   const handleCancelDeleteConfirm = () => {
     setConfirmingDeleteAccount(false);
     setDeleteConfirmText('');
+    setDeletePassword('');
+    setDeleteError('');
   };
 
-  const handleConfirmDeleteAccount = (e) => {
+  const handleConfirmDeleteAccount = async (e) => {
     e.preventDefault();
     if (deleteConfirmText.trim().toUpperCase() !== DELETE_CONFIRM_WORD) return;
 
-    setConfirmingDeleteAccount(false);
-    setDeleteConfirmText('');
-    setActivePanel(null);
-    setIsSectionExpanded(false);
-
-    onDeleteAccount?.();
+    setDeleteError('');
+    setIsDeletingAccount(true);
+    try {
+      await onDeleteAccount?.(deletePassword);
+    } catch (error) {
+      setDeleteError(
+        error?.code === 'auth/wrong-password' ||
+          error?.code === 'auth/invalid-credential'
+          ? t?.deleteAccountWrongPassword ||
+              'La contraseña no es correcta. Verificala e intentá de nuevo.'
+          : error?.code === 'auth/requires-recent-login'
+            ? t?.deleteAccountRecentLogin ||
+                'Volvé a iniciar sesión y luego intentá eliminar la cuenta nuevamente.'
+            : t?.deleteAccountError ||
+                'No se pudo completar la eliminación. Tus datos no se eliminaron por completo; intentá otra vez.'
+      );
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   const handleFeedbackSubmit = async (e) => {
@@ -420,20 +440,42 @@ export default function ProfileAccountSection({
                 />
               </div>
 
+              <div className="space-y-1">
+                <label className="block text-[11px] font-bold text-[#18181B]">
+                  {t?.deleteAccountPasswordLabel || 'Contraseña actual'}
+                </label>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  className="w-full bg-white border border-[#E5E0F5] rounded-xl px-3 py-2 text-xs text-[#18181B] focus:outline-none focus:border-[#5B3DF5]"
+                />
+              </div>
+
+              {deleteError && (
+                <p role="alert" className="text-[11px] font-bold text-red-700">
+                  {deleteError}
+                </p>
+              )}
+
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={handleCancelDeleteConfirm}
+                  disabled={isDeletingAccount}
                   className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white border border-[#E5E0F5] text-[#18181B] transition-all active:scale-95"
                 >
                   {t?.cancelBtn || 'Cancelar'}
                 </button>
                 <button
                   type="submit"
-                  disabled={!isDeleteWordMatched}
+                  disabled={!isDeleteWordMatched || !deletePassword || isDeletingAccount}
                   className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-[#18181B] hover:bg-[#27272A] disabled:bg-[#E5E0F5] disabled:text-[#6B7280]/60 text-white transition-all active:scale-95"
                 >
-                  {t?.confirmDeleteAccountBtn || 'Eliminar definitivamente'}
+                  {isDeletingAccount
+                    ? t?.deletingAccountBtn || 'Eliminando...'
+                    : t?.confirmDeleteAccountBtn || 'Eliminar definitivamente'}
                 </button>
               </div>
             </form>

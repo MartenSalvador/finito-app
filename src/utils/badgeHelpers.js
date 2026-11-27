@@ -6,12 +6,17 @@ export function evaluateUserBadges({
   trades = [],
   proposals = [],
 }) {
-  const earned = new Set(Array.isArray(existingBadges) ? existingBadges : []);
+  const persistedBadges = Array.isArray(user?.badges) ? user.badges : [];
+  const currentBadges = Array.isArray(existingBadges) ? existingBadges : [];
+  const earned = new Set([...persistedBadges, ...currentBadges]);
+
   if (!userId) return Array.from(earned);
+
+  const targetId = String(userId);
 
   // 1. Mesa armada ("gallery-keeper"): compartió al menos 1 rompecabezas terminado
   const userCompletedCount = completedPuzzles.filter(
-    (item) => (item.userId || item.ownerId) === userId
+    (item) => String(item?.userId ?? item?.ownerId ?? '') === targetId
   ).length;
 
   if (userCompletedCount >= 1) {
@@ -27,8 +32,10 @@ export function evaluateUserBadges({
       tr.receiverId,
       tr.targetUserId,
       tr.ownerId,
-    ].filter(Boolean);
-    return participantIds.includes(userId);
+    ]
+      .filter(Boolean)
+      .map(String);
+    return participantIds.includes(targetId);
   });
 
   const completedTradesFromProposals = proposals.filter((prop) => {
@@ -38,15 +45,17 @@ export function evaluateUserBadges({
       prop.receiverId,
       prop.recipientId,
       prop.targetOwnerId,
-    ].filter(Boolean);
-    return participantIds.includes(userId);
+    ]
+      .filter(Boolean)
+      .map(String);
+    return participantIds.includes(targetId);
   });
 
   // Evitamos contar doble el mismo intercambio si existe en ambos arrays
   const uniqueCompletedTradeKeys = new Set();
   [...completedTradesFromTrades, ...completedTradesFromProposals].forEach((item) => {
     const key = item.tradeId || item.id;
-    if (key) uniqueCompletedTradeKeys.add(key);
+    if (key) uniqueCompletedTradeKeys.add(String(key));
   });
 
   const completedSwapsCount = uniqueCompletedTradeKeys.size;

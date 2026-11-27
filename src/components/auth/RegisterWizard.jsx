@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowLeft, ArrowRight, Check, Eye, EyeOff, X } from 'lucide-react';
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Eye,
+  EyeOff,
+  Loader2,
+  X,
+} from 'lucide-react';
+import { auth, db } from '../../firebase/config';
 import CityAutocompleteInput from '../CityAutocompleteInput';
+import { toPublicProfile } from '../../utils/profileHelpers';
 
 const TOTAL_STEPS = 5;
 
@@ -46,6 +59,7 @@ export default function RegisterWizard({
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [legalDocModal, setLegalDocModal] = useState(null); // 'terms' | 'privacy' | null
   const [registerError, setRegisterError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const nameInputRef = useRef(null);
   const birthDateInputRef = useRef(null);
@@ -227,6 +241,7 @@ export default function RegisterWizard({
   };
 
   const handlePrevStep = () => {
+    if (isSubmitting) return;
     setRegisterError('');
     setLegalDocModal(null);
     setStep((prev) => Math.max(1, prev - 1));
@@ -239,35 +254,91 @@ export default function RegisterWizard({
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     if (step < TOTAL_STEPS) {
       handleNextStep();
       return;
     }
-    if (!validateStep(2) || !validateStep(5)) return;
+    if (!validateStep(1) || !validateStep(2) || !validateStep(3) || !validateStep(4) || !validateStep(5)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setRegisterError('');
 
     const normalizedEmail = regEmailInput.trim().toLowerCase();
+    const cleanName = nameInput.trim() || (t?.defaultNewUserName || 'Nuevo Puzzler');
     const cleanCityName =
       (cityInput.split(',')[0] || '').trim() || (t?.defaultCityName || 'Delmenhorst');
+    const acceptedTermsAt = new Date().toISOString();
 
-    const newUser = {
-      id: `u_${Date.now()}`,
-      name: nameInput.trim() || (t?.defaultNewUserName || 'Nuevo Puzzler'),
-      birthDate: birthDateInput,
-      email: normalizedEmail,
-      city: cleanCityName,
-      cp: '',
-      lat: selectedCoords.lat,
-      lon: selectedCoords.lon,
-      rating: null,
-      tradesCount: 0,
-      avatar: '',
-      acceptedTermsAt: new Date().toISOString(),
-    };
+    try {
+      const credential = await createUserWithEmailAndPassword(
+        auth,
+        normalizedEmail,
+        regPassInput
+      );
+      const firebaseUser = credential.user;
 
-    onRegisterUser?.(newUser, regPassInput);
-    onCompleteAuth?.(newUser, { isNewRegistration: true });
+      await updateProfile(firebaseUser, { displayName: cleanName });
+
+      const userDocPayload = {
+        name: cleanName,
+        birthDate: birthDateInput,
+        email: normalizedEmail,
+        city: cleanCityName,
+        cp: '',
+        lat: selectedCoords.lat,
+        lon: selectedCoords.lon,
+        rating: null,
+        tradesCount: 0,
+        avatar: '',
+        acceptedTermsAt,
+        createdAt: serverTimestamp(),
+      };
+
+      await setDoc(doc(db, 'users', firebaseUser.uid), userDocPayload);
+      await setDoc(
+        doc(db, 'publicProfiles', firebaseUser.uid),
+        toPublicProfile(userDocPayload)
+      );
+
+      const newUser = {
+        id: firebaseUser.uid,
+        ...userDocPayload,
+        createdAt: acceptedTermsAt,
+      };
+
+      onRegisterUser?.(newUser);
+      onCompleteAuth?.(newUser, { isNewRegistration: true });
+    } catch (error) {
+      const code = error?.code || '';
+
+      if (code === 'auth/email-already-in-use') {
+        setStep(4);
+        setRegisterError(
+          t?.emailAlreadyExists || 'Ya existe una cuenta registrada con ese correo.'
+        );
+      } else if (code === 'auth/invalid-email') {
+        setStep(4);
+        setRegisterError(
+          t?.invalidEmailError || 'Ingresá un correo electrónico válido.'
+        );
+      } else if (code === 'auth/weak-password') {
+        setRegisterError(
+          t?.passwordMinLengthError || 'La contraseña debe tener al menos 6 caracteres.'
+        );
+      } else {
+        setRegisterError(
+          t?.genericRegisterError || 'No pudimos crear la cuenta. Intentá nuevamente.'
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -414,23 +485,25 @@ export default function RegisterWizard({
                   autoFocus
                   autoComplete="new-password"
                   minLength={6}
+                  disabled={isSubmitting}
                   placeholder={t?.passwordPlaceholder || 'Mínimo 6 caracteres'}
                   value={regPassInput}
                   onChange={(e) => {
                     setRegPassInput(e.target.value);
                     if (registerError) setRegisterError('');
                   }}
-                  className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200"
+                  className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200 disabled:opacity-60"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
+                  disabled={isSubmitting}
                   aria-label={
                     showPassword
                       ? t?.hidePasswordAria || 'Ocultar contraseña'
                       : t?.showPasswordAria || 'Ver contraseña'
                   }
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors disabled:opacity-50"
                 >
                   {showPassword ? (
                     <EyeOff className="w-4 h-4" />
@@ -450,23 +523,25 @@ export default function RegisterWizard({
                   type={showConfirmPassword ? 'text' : 'password'}
                   autoComplete="new-password"
                   minLength={6}
+                  disabled={isSubmitting}
                   placeholder={t?.confirmPasswordPlaceholder || 'Repetí tu contraseña'}
                   value={confirmPassInput}
                   onChange={(e) => {
                     setConfirmPassInput(e.target.value);
                     if (registerError) setRegisterError('');
                   }}
-                  className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200"
+                  className="w-full bg-[#F5F3FF] border border-[#E5E0F5] rounded-2xl pl-4 pr-11 py-3 text-sm text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] focus:bg-white transition-all duration-200 disabled:opacity-60"
                 />
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword((prev) => !prev)}
+                  disabled={isSubmitting}
                   aria-label={
                     showConfirmPassword
                       ? t?.hidePasswordAria || 'Ocultar contraseña'
                       : t?.showPasswordAria || 'Ver contraseña'
                   }
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-full text-[#6B7280] hover:text-[#5B3DF5] hover:bg-[#EBE7FF]/70 transition-colors disabled:opacity-50"
                 >
                   {showConfirmPassword ? (
                     <EyeOff className="w-4 h-4" />
@@ -481,6 +556,7 @@ export default function RegisterWizard({
               <input
                 type="checkbox"
                 checked={acceptedTerms}
+                disabled={isSubmitting}
                 onChange={(e) => {
                   setAcceptedTerms(e.target.checked);
                   if (registerError) setRegisterError('');
@@ -547,7 +623,8 @@ export default function RegisterWizard({
           <button
             type="button"
             onClick={handlePrevStep}
-            className="px-4 py-3 rounded-2xl border border-[#E5E0F5] bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] font-bold text-sm transition-all duration-200 active:scale-95 inline-flex items-center justify-center gap-1.5"
+            disabled={isSubmitting}
+            className="px-4 py-3 rounded-2xl border border-[#E5E0F5] bg-[#F5F3FF] hover:bg-[#EBE7FF] text-[#18181B] font-bold text-sm transition-all duration-200 active:scale-95 inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>{t?.backBtn || 'Atrás'}</span>
@@ -566,9 +643,14 @@ export default function RegisterWizard({
         ) : (
           <button
             type="submit"
-            className="flex-1 bg-[#5B3DF5] hover:bg-[#482BD9] text-white font-bold py-3 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow-md active:scale-[0.98] text-sm inline-flex items-center justify-center gap-1.5"
+            disabled={isSubmitting}
+            className="flex-1 bg-[#5B3DF5] hover:bg-[#482BD9] text-white font-bold py-3 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow-md active:scale-[0.98] text-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-65 disabled:pointer-events-none"
           >
-            <Check className="w-4 h-4" />
+            {isSubmitting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Check className="w-4 h-4" />
+            )}
             <span>{t?.registerBtn || 'Registrarse'}</span>
           </button>
         )}
