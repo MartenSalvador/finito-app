@@ -601,16 +601,6 @@ export function useTradeLifecycle({
         );
       }
 
-      const targetProposalId =
-        proposalOrTrade.id || relatedTrade?.chatProposalId || null;
-      if (targetProposalId && isFirestoreDocId(targetProposalId)) {
-        updateDoc(doc(db, 'proposals', targetProposalId), {
-          status: 'completed',
-          completedAt,
-        }).catch((err) =>
-          console.error('Error marcando propuesta como completada:', err)
-        );
-      }
     },
     [currentUser, puzzles, trades, setPuzzles, setFavorites, setProposals, setTrades]
   );

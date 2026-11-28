@@ -27,6 +27,148 @@ service cloud.firestore {
         && get(tradePath).data.status in ['pending', 'accepted'];
     }
 
+    function validMessage(message, senderId) {
+      return message is map
+        && message.keys().hasOnly([
+          'senderId',
+          'sender',
+          'text',
+          'time',
+          'sentAt'
+        ])
+        && message.senderId == senderId
+        && message.sender is string
+        && message.text is string
+        && message.text.size() > 0
+        && message.time is string
+        && (!message.keys().hasAny(['sentAt']) || message.sentAt is int);
+    }
+
+    function validInitialProposalState() {
+      let confirmations = request.resource.data.confirmations;
+      let messages = request.resource.data.messages;
+      let readBy = request.resource.data.readBy;
+      let participantIds = [
+        request.resource.data.senderId,
+        request.resource.data.receiverId
+      ];
+      return confirmations is map
+        && confirmations.keys().hasOnly(participantIds)
+        && confirmations.keys().hasAll(participantIds)
+        && confirmations.get(request.resource.data.senderId, true) == false
+        && confirmations.get(request.resource.data.receiverId, true) == false
+        && messages is list
+        && messages.size() <= 1
+        && (messages.size() == 0
+          ? true
+          : validMessage(messages[0], request.resource.data.senderId))
+        && readBy is map
+        && readBy.keys().hasOnly([request.auth.uid, request.resource.data.senderId])
+        && readBy.get(request.auth.uid, false) == true
+        && readBy.get(request.resource.data.senderId, false) == false
+        && !request.resource.data.keys().hasAny(['hiddenBy']);
+    }
+
+    function validMessageAppend() {
+      return request.resource.data.messages is list
+        && resource.data.messages is list
+        && request.resource.data.messages.size() == resource.data.messages.size() + 1
+        && request.resource.data.messages.hasAll(resource.data.messages)
+        && validMessage(
+          request.resource.data.messages[request.resource.data.messages.size() - 1],
+          request.auth.uid
+        );
+    }
+
+    function validConfirmationsUpdate() {
+      let confirmations = request.resource.data.confirmations;
+      let previousConfirmations = resource.data.get('confirmations', {});
+      let changedKeys = confirmations.diff(previousConfirmations).affectedKeys();
+      return confirmations is map
+        && previousConfirmations is map
+        && confirmations.keys().hasOnly([
+          resource.data.senderId,
+          resource.data.receiverId
+        ])
+        && changedKeys.hasOnly([request.auth.uid])
+        && changedKeys.hasAny([request.auth.uid])
+        && confirmations.get(request.auth.uid, false) == true;
+    }
+
+    function validProposalCompletionUpdate() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      let confirmations = request.resource.data.get('confirmations', {});
+      return !changedKeys.hasAny(['status', 'completedAt'])
+        || (changedKeys.hasAll(['status', 'completedAt'])
+          && request.resource.data.status == 'completed'
+          && resource.data.status in ['accepted', 'confirmed']
+          && request.resource.data.completedAt is int
+          && confirmations is map
+          && confirmations.get(resource.data.senderId, false) == true
+          && confirmations.get(resource.data.receiverId, false) == true);
+    }
+
+    function validTradeAcceptance(tradeId) {
+      let proposalPath = /databases/$(database)/documents/proposals/$(request.resource.data.chatProposalId);
+      return request.resource.data.chatProposalId is string
+        && exists(proposalPath)
+        && get(proposalPath).data.tradeId == tradeId
+        && get(proposalPath).data.senderId == resource.data.senderId
+        && get(proposalPath).data.receiverId == resource.data.receiverId
+        && get(proposalPath).data.status == 'accepted'
+        && (resource.data.get('chatProposalId', null) == null
+          || request.resource.data.chatProposalId == resource.data.chatProposalId);
+    }
+
+    function validTradeCompletion(tradeId) {
+      let proposalId = resource.data.get('chatProposalId', '');
+      let proposalPath = /databases/$(database)/documents/proposals/$(proposalId);
+      return resource.data.status == 'accepted'
+        && request.resource.data.status == 'completed'
+        && request.resource.data.completedAt is int
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['status', 'completedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasAll(['status', 'completedAt'])
+        && exists(proposalPath)
+        && get(proposalPath).data.tradeId == tradeId
+        && get(proposalPath).data.status == 'completed'
+        && get(proposalPath).data.confirmations.get(resource.data.senderId, false) == true
+        && get(proposalPath).data.confirmations.get(resource.data.receiverId, false) == true;
+    }
+
+    function validTradeLifecycleUpdate(tradeId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return !changedKeys.hasAny([
+          'status',
+          'chatProposalId',
+          'rejectedAt',
+          'expired',
+          'blockedByUser',
+          'completedAt'
+        ])
+        || ((resource.data.status in ['pending', 'accepted']
+            && request.resource.data.status == 'accepted'
+            && request.auth.uid == resource.data.receiverId
+            && changedKeys.hasOnly(['status', 'chatProposalId'])
+            && validTradeAcceptance(tradeId))
+          || (resource.data.status == 'pending'
+            && request.resource.data.status == 'rejected'
+            && request.resource.data.rejectedAt is int
+            && changedKeys.hasAll(['status', 'rejectedAt'])
+            && changedKeys.hasOnly([
+              'status',
+              'rejectedAt',
+              'expired',
+              'blockedByUser'
+            ])
+            && (!changedKeys.hasAny(['expired'])
+              || request.resource.data.expired == true)
+            && (!changedKeys.hasAny(['blockedByUser'])
+              || request.resource.data.blockedByUser == true))
+          || validTradeCompletion(tradeId));
+    }
+
     function validReadByUpdate() {
       let otherUid = resource.data.senderId == request.auth.uid
         ? resource.data.receiverId
@@ -162,16 +304,19 @@ service cloud.firestore {
               'expired',
               'blockedByUser',
               'completedAt'
-            ])));
+            ])
+            && validTradeLifecycleUpdate(tradeId)));
     }
 
     match /proposals/{proposalId} {
       allow read: if isParticipant(resource.data);
       allow create: if signedIn()
         && isParticipant(request.resource.data)
+        && request.auth.uid == request.resource.data.receiverId
         && request.resource.data.senderId != request.resource.data.receiverId
         && proposalMatchesTrade()
         && request.resource.data.status == 'accepted'
+        && validInitialProposalState()
         && request.resource.data.keys().hasOnly([
           'id',
           'tradeId',
@@ -218,16 +363,10 @@ service cloud.firestore {
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['hiddenBy'])
               || validHiddenByUpdate())
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['messages'])
-              || (request.resource.data.messages is list
-                && resource.data.messages is list
-                && request.resource.data.messages.size() == resource.data.messages.size() + 1
-                && request.resource.data.messages[request.resource.data.messages.size() - 1].senderId
-                  in [request.auth.uid, 'system']))
+              || validMessageAppend())
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['confirmations'])
-              || (request.resource.data.confirmations is map
-                && resource.data.confirmations is map
-                && request.resource.data.confirmations.diff(resource.data.confirmations)
-                  .affectedKeys().hasOnly([request.auth.uid])))));
+              || validConfirmationsUpdate())
+            && validProposalCompletionUpdate()));
     }
 
     match /reports/{reportId} {

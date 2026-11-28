@@ -96,6 +96,7 @@ export default function MessagesView({
   const [activeChatId, setActiveChatId] = useState(selectedProposalId || null);
   const [chatMessageInput, setChatMessageInput] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isConfirmingTrade, setIsConfirmingTrade] = useState(false);
   const [isDeletingChat, setIsDeletingChat] = useState(false);
   const [messageError, setMessageError] = useState('');
   const [localBlockedIds, setLocalBlockedIds] = useState([]);
@@ -414,8 +415,18 @@ export default function MessagesView({
     }
   };
 
-  const handleConfirmTrade = () => {
-    if (!activeChat || !currentUser?.id || isCounterpartBlocked) return;
+  const handleConfirmTrade = async () => {
+    if (
+      !activeChat ||
+      !currentUser?.id ||
+      isCounterpartBlocked ||
+      isConfirmingTrade
+    ) {
+      return;
+    }
+
+    setIsConfirmingTrade(true);
+    setMessageError('');
 
     const counterpart = getCounterpartInfo(activeChat);
     const counterpartId = counterpart.id;
@@ -443,10 +454,9 @@ export default function MessagesView({
           '{name} confirmó el intercambio. Falta la confirmación de la otra parte.'
         ).replace('{name}', currentUser.name || 'Usuario');
 
-    const systemMsg = {
-      senderId: 'system',
-      sender: 'Finito',
-      isSystem: true,
+    const confirmationMsg = {
+      senderId: currentUser.id,
+      sender: currentUser.name || 'Usuario',
       text: systemText,
       time: t?.justNow || 'Hace un momento',
       sentAt: getCurrentTimestamp(),
@@ -457,32 +467,40 @@ export default function MessagesView({
       confirmations: nextConfirmations,
       status: bothConfirmed ? 'completed' : activeChat.status || 'accepted',
       completedAt: bothConfirmed ? getCurrentTimestamp() : activeChat.completedAt,
-      messages: [...(activeChat.messages || []), systemMsg],
+      messages: [...(activeChat.messages || []), confirmationMsg],
     };
 
-    if (setProposals) {
-      setProposals((prev) =>
-        prev.map((prop) => (prop.id === activeChat.id ? nextProposal : prop))
-      );
-    }
+    try {
+      if (isFirestoreDocId(activeChat.id)) {
+        await updateDoc(doc(db, 'proposals', activeChat.id), {
+          confirmations: nextConfirmations,
+          messages: nextProposal.messages,
+          ...(bothConfirmed
+            ? {
+                status: 'completed',
+                completedAt: nextProposal.completedAt,
+              }
+            : {}),
+        });
+      }
 
-    if (isFirestoreDocId(activeChat.id)) {
-      updateDoc(doc(db, 'proposals', activeChat.id), {
-        confirmations: nextConfirmations,
-        messages: nextProposal.messages,
-        ...(bothConfirmed
-          ? {
-              status: 'completed',
-              completedAt: nextProposal.completedAt,
-            }
-          : {}),
-      }).catch((err) =>
-        console.error('Error guardando confirmación de intercambio:', err)
-      );
-    }
+      if (setProposals) {
+        setProposals((prev) =>
+          prev.map((prop) => (prop.id === activeChat.id ? nextProposal : prop))
+        );
+      }
 
-    if (bothConfirmed && !wasAlreadyCompleted && onConfirmTrade) {
-      onConfirmTrade(nextProposal);
+      if (bothConfirmed && !wasAlreadyCompleted && onConfirmTrade) {
+        onConfirmTrade(nextProposal);
+      }
+    } catch (error) {
+      console.error('Error guardando confirmación de intercambio:', error);
+      setMessageError(
+        t?.tradeConfirmError ||
+          'No se pudo guardar la confirmación del intercambio. Intentá nuevamente.'
+      );
+    } finally {
+      setIsConfirmingTrade(false);
     }
   };
 
@@ -500,9 +518,8 @@ const handleConfirmBlockUser = () => {
     }
 
     const blockMsg = {
-      senderId: 'system',
-      sender: 'Finito',
-      isSystem: true,
+      senderId: currentUser.id,
+      sender: currentUser.name || 'Usuario',
       text: (
         t?.userBlockedSystemMsg ||
         'Bloqueaste a {name}. Ya no podrán enviarse mensajes ni nuevas propuestas.'
@@ -553,9 +570,8 @@ const handleConfirmBlockUser = () => {
     }
 
     const unblockMsg = {
-      senderId: 'system',
-      sender: 'Finito',
-      isSystem: true,
+      senderId: currentUser.id,
+      sender: currentUser.name || 'Usuario',
       text: (
         t?.userUnblockedSystemMsg ||
         'Desbloqueaste a {name}. Ya podés volver a enviar mensajes.'
@@ -615,9 +631,8 @@ const handleConfirmBlockUser = () => {
     }
 
     const reportMsg = {
-      senderId: 'system',
-      sender: 'Finito',
-      isSystem: true,
+      senderId: currentUser.id,
+      sender: currentUser.name || 'Usuario',
       text:
         t?.reportSentSystemMsg ||
         'Enviaste un reporte sobre este intercambio. Si necesitás distancia, también podés bloquear al usuario.',
@@ -1024,7 +1039,7 @@ const handleConfirmBlockUser = () => {
               ) : (
                 <button
                   type="button"
-                  disabled={isCounterpartBlocked}
+                  disabled={isCounterpartBlocked || isConfirmingTrade}
                   onClick={handleConfirmTrade}
                   className="inline-flex items-center justify-center gap-1.5 bg-[#5B3DF5] hover:bg-[#482BD9] disabled:bg-[#E5E0F5] disabled:text-[#6B7280]/60 text-white text-xs font-bold px-4 py-2 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow active:scale-95 shrink-0 self-start sm:self-center"
                 >

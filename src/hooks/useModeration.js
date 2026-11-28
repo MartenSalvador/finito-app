@@ -123,9 +123,8 @@ export function useModeration({
         contextProposal?.receiverName ||
         'este usuario';
       const sysMsg = {
-        senderId: 'system',
-        sender: 'Finito',
-        isSystem: true,
+        senderId: currentUser.id,
+        sender: currentUser.name || 'Usuario',
         text: (
           t?.userBlockedSystemMsg ||
           'Bloqueaste a {name}. Ya no podrán enviarse mensajes ni nuevas propuestas.'
@@ -194,7 +193,9 @@ export function useModeration({
 
             const currentMsgs = Array.isArray(prop.messages) ? prop.messages : [];
             const alreadyHasBlockMsg = currentMsgs.some(
-              (m) => m.isSystem && m.text === sysMsg.text
+              (m) =>
+                m.text === sysMsg.text &&
+                (m.isSystem || m.senderId === currentUser.id)
             );
             const nextMsgs = alreadyHasBlockMsg
               ? currentMsgs
@@ -222,7 +223,9 @@ export function useModeration({
 
             const currentMsgs = Array.isArray(prop.messages) ? prop.messages : [];
             const alreadyHasBlockMsg = currentMsgs.some(
-              (m) => m.isSystem && m.text === sysMsg.text
+              (m) =>
+                m.text === sysMsg.text &&
+                (m.isSystem || m.senderId === currentUser.id)
             );
 
             return {

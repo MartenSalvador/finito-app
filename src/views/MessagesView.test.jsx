@@ -23,8 +23,9 @@ function renderChat(proposalId) {
     receiverId: 'user-b',
     receiverName: 'Beto',
     status: 'accepted',
+    readBy: { 'user-a': true, 'user-b': false },
     messages: [],
-    confirmations: {},
+    confirmations: { 'user-a': false, 'user-b': false },
   };
 
   return render(
@@ -123,6 +124,99 @@ describe('MessagesView chat persistence', () => {
       finishUpdate();
     });
     await waitFor(() => expect(input.value).toBe(''));
+  });
+
+  it('stores the current user as the author of their confirmation', async () => {
+    const onConfirmTrade = vi.fn();
+    render(
+      <MessagesView
+        proposals={[
+          {
+            id: 'tAbCdEfGhIjKlMnOpQrS',
+            senderId: 'user-a',
+            senderName: 'Ana',
+            receiverId: 'user-b',
+            receiverName: 'Beto',
+            status: 'accepted',
+            readBy: { 'user-a': true, 'user-b': false },
+            messages: [],
+            confirmations: { 'user-a': false, 'user-b': false },
+          },
+        ]}
+        setProposals={vi.fn()}
+        currentUser={{ id: 'user-a', name: 'Ana' }}
+        users={[{ id: 'user-b', name: 'Beto' }]}
+        selectedProposalId="tAbCdEfGhIjKlMnOpQrS"
+        onConfirmTrade={onConfirmTrade}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirmar intercambio' })
+    );
+
+    await waitFor(() =>
+      expect(
+        updateDocMock.mock.calls.some(([, fields]) => fields.confirmations)
+      ).toBe(true)
+    );
+    const [, update] = updateDocMock.mock.calls.find(
+      ([, fields]) => fields.confirmations
+    );
+    const confirmationMessage = update.messages[0];
+
+    expect(update.confirmations).toEqual({
+      'user-a': true,
+      'user-b': false,
+    });
+    expect(confirmationMessage).toMatchObject({
+      senderId: 'user-a',
+      sender: 'Ana',
+    });
+    expect(confirmationMessage.isSystem).toBeUndefined();
+    expect(update.status).toBeUndefined();
+    expect(onConfirmTrade).not.toHaveBeenCalled();
+  });
+
+  it('completes the trade only when the other participant already confirmed', async () => {
+    const onConfirmTrade = vi.fn();
+    render(
+      <MessagesView
+        proposals={[
+          {
+            id: 'tAbCdEfGhIjKlMnOpQrS',
+            senderId: 'user-a',
+            senderName: 'Ana',
+            receiverId: 'user-b',
+            receiverName: 'Beto',
+            status: 'accepted',
+            readBy: { 'user-a': true, 'user-b': false },
+            messages: [],
+            confirmations: { 'user-a': false, 'user-b': true },
+          },
+        ]}
+        setProposals={vi.fn()}
+        currentUser={{ id: 'user-a', name: 'Ana' }}
+        users={[{ id: 'user-b', name: 'Beto' }]}
+        selectedProposalId="tAbCdEfGhIjKlMnOpQrS"
+        onConfirmTrade={onConfirmTrade}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirmar intercambio' })
+    );
+
+    await waitFor(() => expect(onConfirmTrade).toHaveBeenCalledOnce());
+    const [, update] = updateDocMock.mock.calls.find(
+      ([, fields]) => fields.confirmations
+    );
+    expect(update.confirmations).toEqual({
+      'user-a': true,
+      'user-b': true,
+    });
+    expect(update.status).toBe('completed');
+    expect(update.completedAt).toEqual(expect.any(Number));
   });
 
   it('keeps the message and reports the error when Firestore rejects it', async () => {

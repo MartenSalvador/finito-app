@@ -200,10 +200,18 @@ await expectStatus(
 );
 await expectStatus(
   await write('trades/trade-ab', { status: 'accepted' }, { uid: 'bob', updateMask: ['status'] }),
-  200,
-  'receiver can accept trade'
+  403,
+  'trade cannot be accepted without a linked proposal'
 );
-console.log('PASS participant-scoped trade access');
+await expectStatus(
+  await write(
+    'trades/trade-ab',
+    { status: 'completed', completedAt: Date.now() },
+    { uid: 'bob', updateMask: ['status', 'completedAt'] }
+  ),
+  403,
+  'participant cannot complete a pending trade'
+);
 
 const proposal = {
   id: 'proposal-ab',
@@ -222,17 +230,70 @@ const proposal = {
   puzzleOfferedTitle: 'Puzzle A',
   status: 'accepted',
   read: true,
-  readBy: { alice: false, bob: false },
+  readBy: { alice: false, bob: true },
   createdAt: Date.now(),
   serverCreatedAt: { timestampValue: new Date().toISOString() },
   messages: [],
   confirmations: { alice: false, bob: false },
 };
 await expectStatus(
+  await write('proposals/proposal-from-sender', proposal, { uid: 'alice' }),
+  403,
+  'only the receiver can create the accepted proposal'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-preconfirmed',
+    { ...proposal, confirmations: { alice: true, bob: true } },
+    { uid: 'bob' }
+  ),
+  403,
+  'proposal cannot be created with forged confirmations'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-system-message',
+    {
+      ...proposal,
+      messages: [
+        {
+          senderId: 'system',
+          sender: 'Finito',
+          text: 'Intercambio completado',
+          time: 'now',
+          isSystem: true,
+        },
+      ],
+    },
+    { uid: 'bob' }
+  ),
+  403,
+  'proposal cannot be created with a client-authored system message'
+);
+await expectStatus(
   await write('proposals/proposal-ab', proposal, { uid: 'bob' }),
   200,
   'trade participant creates linked proposal'
 );
+await expectStatus(
+  await write(
+    'trades/trade-ab',
+    { status: 'accepted', chatProposalId: 'proposal-ab' },
+    { uid: 'bob', updateMask: ['status', 'chatProposalId'] }
+  ),
+  200,
+  'receiver accepts trade after creating its linked proposal'
+);
+await expectStatus(
+  await write(
+    'trades/trade-ab',
+    { status: 'completed', completedAt: Date.now() },
+    { uid: 'bob', updateMask: ['status', 'completedAt'] }
+  ),
+  403,
+  'accepted trade cannot be completed before both confirmations'
+);
+console.log('PASS participant-scoped trade access');
 await expectStatus(
   await request('/proposals/proposal-ab', { uid: 'charlie' }),
   403,
@@ -341,7 +402,66 @@ await expectStatus(
   await write(
     'proposals/proposal-ab',
     {
-      messages: [{ senderId: 'bob', text: 'Hello', time: 'now' }],
+      messages: [
+        {
+          senderId: 'system',
+          sender: 'Finito',
+          text: 'Intercambio completado',
+          time: 'now',
+          isSystem: true,
+        },
+      ],
+    },
+    { uid: 'bob', updateMask: ['messages'] }
+  ),
+  403,
+  'participant cannot append a system-authored message'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      messages: [
+        {
+          senderId: 'alice',
+          sender: 'Alice',
+          text: 'Forged',
+          time: 'now',
+          sentAt: Date.now(),
+        },
+      ],
+    },
+    { uid: 'bob', updateMask: ['messages'] }
+  ),
+  403,
+  'participant cannot forge another sender'
+);
+const initialChatMessage = {
+  senderId: 'bob',
+  sender: 'Bob',
+  text: 'Hello',
+  time: 'now',
+  sentAt: Date.now(),
+};
+const bobConfirmationMessage = {
+  senderId: 'bob',
+  sender: 'Bob',
+  text: 'Confirmo el intercambio.',
+  time: 'now',
+  sentAt: Date.now(),
+};
+const aliceConfirmationMessage = {
+  senderId: 'alice',
+  sender: 'Alice',
+  text: 'Confirmo el intercambio.',
+  time: 'now',
+  sentAt: Date.now(),
+};
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      messages: [initialChatMessage],
       readBy: { alice: false, bob: true },
     },
     { uid: 'bob', updateMask: ['messages', 'readBy'] }
@@ -352,11 +472,96 @@ await expectStatus(
 await expectStatus(
   await write(
     'proposals/proposal-ab',
-    { messages: [{ senderId: 'alice', text: 'Forged', time: 'now' }] },
+    {
+      messages: [
+        {
+          senderId: 'bob',
+          sender: 'Bob',
+          text: 'Edited old message',
+          time: 'now',
+          sentAt: Date.now(),
+        },
+        {
+          senderId: 'bob',
+          sender: 'Bob',
+          text: 'New message',
+          time: 'now',
+          sentAt: Date.now(),
+        },
+      ],
+    },
     { uid: 'bob', updateMask: ['messages'] }
   ),
   403,
-  'participant cannot forge another sender'
+  'participant cannot rewrite existing chat history while appending'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    { status: 'completed', completedAt: Date.now() },
+    { uid: 'bob', updateMask: ['status', 'completedAt'] }
+  ),
+  403,
+  'participant cannot complete a proposal before both confirmations'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      confirmations: { alice: true, bob: true },
+      status: 'completed',
+      completedAt: Date.now(),
+      messages: [initialChatMessage, bobConfirmationMessage],
+    },
+    {
+      uid: 'bob',
+      updateMask: ['confirmations', 'status', 'completedAt', 'messages'],
+    }
+  ),
+  403,
+  'participant cannot confirm on behalf of the other participant'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      confirmations: { alice: false, bob: true },
+      messages: [initialChatMessage, bobConfirmationMessage],
+    },
+    { uid: 'bob', updateMask: ['confirmations', 'messages'] }
+  ),
+  200,
+  'participant can confirm their own side'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      confirmations: { alice: true, bob: true },
+      status: 'completed',
+      completedAt: Date.now(),
+      messages: [
+        initialChatMessage,
+        bobConfirmationMessage,
+        aliceConfirmationMessage,
+      ],
+    },
+    {
+      uid: 'alice',
+      updateMask: ['confirmations', 'status', 'completedAt', 'messages'],
+    }
+  ),
+  200,
+  'trade completes after both participants confirm'
+);
+await expectStatus(
+  await write(
+    'trades/trade-ab',
+    { status: 'completed', completedAt: Date.now() },
+    { uid: 'bob', updateMask: ['status', 'completedAt'] }
+  ),
+  200,
+  'linked trade completes after both participants confirm'
 );
 await expectStatus(
   await write(
