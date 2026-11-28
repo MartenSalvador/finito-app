@@ -150,7 +150,13 @@ export function buildAcceptedTradeProposal(
     read: false,
     createdAt,
     messages: initialMessageText
-      ? [{ senderId, sender: senderName, text: initialMessageText, time: 'Ahora' }]
+      ? [{
+          senderId,
+          sender: senderName,
+          text: initialMessageText,
+          time: 'Ahora',
+          sentAt: Date.now(),
+        }]
       : [],
   };
 }

@@ -222,6 +222,7 @@ const proposal = {
   puzzleOfferedTitle: 'Puzzle A',
   status: 'accepted',
   read: true,
+  readBy: { alice: false, bob: false },
   createdAt: Date.now(),
   serverCreatedAt: { timestampValue: new Date().toISOString() },
   messages: [],
@@ -294,11 +295,59 @@ assert.equal(
 await expectStatus(
   await write(
     'proposals/proposal-ab',
-    { messages: [{ senderId: 'bob', text: 'Hello', time: 'now' }] },
-    { uid: 'bob', updateMask: ['messages'] }
+    { readBy: { alice: false, bob: true } },
+    { uid: 'bob', updateMask: ['readBy'] }
   ),
   200,
-  'participant appends own chat message'
+  'participant marks their own chat as read'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    { readBy: { alice: true, bob: true } },
+    { uid: 'alice', updateMask: ['readBy'] }
+  ),
+  200,
+  'other participant marks their own chat as read'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    { readBy: { alice: false, bob: true } },
+    { uid: 'bob', updateMask: ['readBy'] }
+  ),
+  403,
+  'participant cannot mark the other user unread without a message'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    { hiddenBy: { alice: true } },
+    { uid: 'alice', updateMask: ['hiddenBy'] }
+  ),
+  200,
+  'participant can hide a chat from their own inbox'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    { hiddenBy: { alice: false, bob: true } },
+    { uid: 'bob', updateMask: ['hiddenBy'] }
+  ),
+  403,
+  'participant cannot hide the chat for the other user'
+);
+await expectStatus(
+  await write(
+    'proposals/proposal-ab',
+    {
+      messages: [{ senderId: 'bob', text: 'Hello', time: 'now' }],
+      readBy: { alice: false, bob: true },
+    },
+    { uid: 'bob', updateMask: ['messages', 'readBy'] }
+  ),
+  200,
+  'participant appends own chat message and marks recipient unread'
 );
 await expectStatus(
   await write(

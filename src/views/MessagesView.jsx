@@ -12,9 +12,11 @@ import {
   Ban,
   X,
   Archive,
+  Trash2,
 } from 'lucide-react';
 import { db } from '../firebase/config';
 import { INITIAL_USERS } from '../data/mockUsers';
+import { isFirestoreDocId } from '../utils/firestoreIdHelpers';
 
 const FALLBACK_AVATAR_IMG =
   'data:image/svg+xml;utf8,' +
@@ -33,10 +35,22 @@ function getCurrentTimestamp() {
   return Date.now();
 }
 
-function isFirestoreProposalId(id) {
-  if (!id) return false;
-  const str = String(id);
-  return !str.startsWith('prop-') && !str.startsWith('chat_');
+function formatMessageTime(sentAt, lang) {
+  const date =
+    sentAt instanceof Date
+      ? sentAt
+      : typeof sentAt === 'number' || typeof sentAt === 'string'
+        ? new Date(sentAt)
+        : typeof sentAt?.toDate === 'function'
+          ? sentAt.toDate()
+          : null;
+
+  if (!date || Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat(lang || 'es', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 function CounterpartAvatar({ name, avatar }) {
@@ -76,12 +90,17 @@ export default function MessagesView({
   onBlockUser,
   onUnblockUser,
   onReportUser,
+  lang = 'es',
   t,
 }) {
   const [activeChatId, setActiveChatId] = useState(selectedProposalId || null);
   const [chatMessageInput, setChatMessageInput] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isDeletingChat, setIsDeletingChat] = useState(false);
+  const [messageError, setMessageError] = useState('');
   const [localBlockedIds, setLocalBlockedIds] = useState([]);
   const [moderationForm, setModerationForm] = useState(null);
+  const chatMessageInputRef = useRef(null);
   const messagesEndRef = useRef(null);
   const lastHandledSelectedIdRef = useRef(selectedProposalId || null);
   const currentModerationForm =
@@ -166,12 +185,43 @@ export default function MessagesView({
     return sentByMe || receivedByMe;
   };
 
-  const visibleProposals = Array.isArray(proposals)
+  const participantProposals = Array.isArray(proposals)
     ? proposals.filter(isParticipant)
     : [];
 
+  const visibleProposals = participantProposals.filter(
+    (proposal) => !proposal.hiddenBy?.[currentUser?.id]
+  );
   const activeChat =
-    visibleProposals.find((p) => p.id === activeChatId) || null;
+    participantProposals.find((p) => p.id === activeChatId) || null;
+  const isPersistedChat = isFirestoreDocId(activeChat?.id);
+
+  useEffect(() => {
+    if (
+      !activeChat ||
+      !currentUser?.id ||
+      activeChat.readBy?.[currentUser.id] === true ||
+      !isFirestoreDocId(activeChat.id)
+    ) {
+      return;
+    }
+
+    setProposals((prev) =>
+      prev.map((proposal) =>
+        proposal.id === activeChat.id
+          ? {
+              ...proposal,
+              readBy: { ...proposal.readBy, [currentUser.id]: true },
+            }
+          : proposal
+      )
+    );
+    updateDoc(doc(db, 'proposals', activeChat.id), {
+      [`readBy.${currentUser.id}`]: true,
+    }).catch((error) =>
+      console.error('Error marcando chat como leído:', error)
+    );
+  }, [activeChat, currentUser?.id, setProposals]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -257,36 +307,110 @@ export default function MessagesView({
   const activeCounterpart = activeChat ? getCounterpartInfo(activeChat) : null;
   const isCounterpartBlocked = Boolean(activeChat && isProposalBlocked(activeChat));
 
-  const sendChatMessage = (e) => {
-    e.preventDefault();
-    if (!chatMessageInput.trim() || !activeChat || !currentUser || isCounterpartBlocked) {
+  const handleHideChat = async () => {
+    if (
+      !activeChat ||
+      !currentUser?.id ||
+      !isPersistedChat ||
+      isDeletingChat
+    ) {
       return;
     }
 
+    const confirmed = window.confirm(
+      t?.confirmHideChat ||
+        '¿Eliminar este chat de tu buzón? La otra persona conservará la conversación.'
+    );
+    if (!confirmed) return;
+
+    setIsDeletingChat(true);
+    setMessageError('');
+    try {
+      await updateDoc(doc(db, 'proposals', activeChat.id), {
+        [`hiddenBy.${currentUser.id}`]: true,
+      });
+      setProposals((prev) =>
+        prev.map((proposal) =>
+          proposal.id === activeChat.id
+            ? {
+                ...proposal,
+                hiddenBy: { ...proposal.hiddenBy, [currentUser.id]: true },
+              }
+            : proposal
+        )
+      );
+      setActiveChatId(null);
+      setModerationForm(null);
+      lastHandledSelectedIdRef.current = null;
+      onClearSelectedProposal?.();
+    } catch (error) {
+      console.error('Error ocultando chat de la bandeja:', error);
+      setMessageError(
+        t?.hideChatError || 'No se pudo eliminar el chat de tu buzón. Intentá nuevamente.'
+      );
+    } finally {
+      setIsDeletingChat(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeChatId && isPersistedChat && !isCounterpartBlocked) {
+      chatMessageInputRef.current?.focus();
+    }
+  }, [activeChatId, isCounterpartBlocked, isPersistedChat]);
+
+  const sendChatMessage = async (e) => {
+    e.preventDefault();
+    if (
+      !chatMessageInput.trim() ||
+      !activeChat ||
+      !currentUser ||
+      isCounterpartBlocked ||
+      !isPersistedChat ||
+      isSendingMessage
+    ) {
+      return;
+    }
+
+    const messageText = chatMessageInput.trim();
     const newMsg = {
       senderId: currentUser.id,
       sender: currentUser.name,
-      text: chatMessageInput.trim(),
+      text: messageText,
       time: t?.justNow || 'Hace un momento',
+      sentAt: getCurrentTimestamp(),
     };
 
     const nextMessages = [...(activeChat.messages || []), newMsg];
-
-    setProposals((prev) =>
-      prev.map((prop) =>
-        prop.id === activeChat.id
-          ? { ...prop, messages: nextMessages }
-          : prop
-      )
-    );
+    const counterpartId = activeCounterpart?.id;
+    const readBy = {
+      ...activeChat.readBy,
+      [currentUser.id]: true,
+      ...(counterpartId ? { [counterpartId]: false } : {}),
+    };
+    setMessageError('');
+    setIsSendingMessage(true);
     setChatMessageInput('');
-
-    if (isFirestoreProposalId(activeChat.id)) {
-      updateDoc(doc(db, 'proposals', activeChat.id), {
+    chatMessageInputRef.current?.focus();
+    try {
+      await updateDoc(doc(db, 'proposals', activeChat.id), {
         messages: nextMessages,
-      }).catch((err) =>
-        console.error('Error guardando mensaje en Firestore:', err)
+        readBy,
+      });
+      setProposals((prev) =>
+        prev.map((proposal) =>
+          proposal.id === activeChat.id ? { ...proposal, messages: nextMessages, readBy } : proposal
+        )
       );
+    } catch (error) {
+      console.error('Error guardando mensaje en Firestore:', error);
+      setChatMessageInput((currentInput) => currentInput || messageText);
+      setMessageError(
+        t?.messageSendError || 'No se pudo enviar el mensaje. Intentá nuevamente.'
+      );
+      chatMessageInputRef.current?.focus();
+    } finally {
+      setIsSendingMessage(false);
     }
   };
 
@@ -325,6 +449,7 @@ export default function MessagesView({
       isSystem: true,
       text: systemText,
       time: t?.justNow || 'Hace un momento',
+      sentAt: getCurrentTimestamp(),
     };
 
     const nextProposal = {
@@ -341,7 +466,7 @@ export default function MessagesView({
       );
     }
 
-    if (isFirestoreProposalId(activeChat.id)) {
+    if (isFirestoreDocId(activeChat.id)) {
       updateDoc(doc(db, 'proposals', activeChat.id), {
         confirmations: nextConfirmations,
         messages: nextProposal.messages,
@@ -383,6 +508,7 @@ const handleConfirmBlockUser = () => {
         'Bloqueaste a {name}. Ya no podrán enviarse mensajes ni nuevas propuestas.'
       ).replace('{name}', activeCounterpart.name || 'este usuario'),
       time: t?.justNow || 'Hace un momento',
+      sentAt: getCurrentTimestamp(),
     };
 
     const nextMessages = [...(activeChat.messages || []), blockMsg];
@@ -402,7 +528,7 @@ const handleConfirmBlockUser = () => {
       );
     }
 
-    if (isFirestoreProposalId(activeChat.id)) {
+    if (isFirestoreDocId(activeChat.id)) {
       updateDoc(doc(db, 'proposals', activeChat.id), {
         blocked: true,
         blockedBy: currentUser?.id || true,
@@ -435,6 +561,7 @@ const handleConfirmBlockUser = () => {
         'Desbloqueaste a {name}. Ya podés volver a enviar mensajes.'
       ).replace('{name}', activeCounterpart.name || 'este usuario'),
       time: t?.justNow || 'Hace un momento',
+      sentAt: getCurrentTimestamp(),
     };
 
     const nextMessages = [...(activeChat.messages || []), unblockMsg];
@@ -454,7 +581,7 @@ const handleConfirmBlockUser = () => {
       );
     }
 
-    if (isFirestoreProposalId(activeChat.id)) {
+    if (isFirestoreDocId(activeChat.id)) {
       updateDoc(doc(db, 'proposals', activeChat.id), {
         blocked: false,
         blockedBy: null,
@@ -495,6 +622,7 @@ const handleConfirmBlockUser = () => {
         t?.reportSentSystemMsg ||
         'Enviaste un reporte sobre este intercambio. Si necesitás distancia, también podés bloquear al usuario.',
       time: t?.justNow || 'Hace un momento',
+      sentAt: getCurrentTimestamp(),
     };
 
     const nextMessages = [...(activeChat.messages || []), reportMsg];
@@ -513,7 +641,7 @@ const handleConfirmBlockUser = () => {
       );
     }
 
-    if (isFirestoreProposalId(activeChat.id)) {
+    if (isFirestoreDocId(activeChat.id)) {
       updateDoc(doc(db, 'proposals', activeChat.id), {
         reported: true,
         messages: nextMessages,
@@ -579,6 +707,11 @@ const handleConfirmBlockUser = () => {
     const counterpart = getCounterpartInfo(prop);
     const lastMsg = prop.messages?.[prop.messages.length - 1];
     const badge = getHeaderStatusBadge(prop);
+    const isUnread = currentUser?.id
+      ? prop.readBy
+        ? prop.readBy[currentUser.id] !== true
+        : !prop.read
+      : false;
 
     return (
       <div
@@ -608,6 +741,11 @@ const handleConfirmBlockUser = () => {
               >
                 {badge.label}
               </span>
+              {isUnread && (
+                <span className="text-[10px] bg-red-600 text-white px-2 py-0.5 rounded-full font-extrabold shrink-0">
+                  {t?.unreadMessageBadge || 'Sin leer'}
+                </span>
+              )}
             </div>
             <p className="text-xs text-[#6B7280] truncate">
               {t?.wantsToTrade || 'Intercambio por'}{' '}
@@ -636,7 +774,7 @@ const handleConfirmBlockUser = () => {
       </h2>
 
       {activeChat ? (
-        <div className="bg-white border border-[#E5E0F5] rounded-3xl flex flex-col h-145 shadow-sm overflow-hidden animate-modal-pop">
+        <div className="bg-white border border-[#E5E0F5] rounded-3xl flex flex-col h-[calc(100dvh-17rem)] min-h-[16rem] sm:h-[calc(100dvh-14rem)] sm:min-h-[20rem] shadow-sm overflow-hidden animate-modal-pop">
           {/* Cabecera del chat */}
           <div className="p-4 border-b border-[#E5E0F5] flex items-center justify-between gap-2 bg-[#F5F3FF]">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -679,7 +817,17 @@ const handleConfirmBlockUser = () => {
               </button>
             </div>
 
-<div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={handleHideChat}
+                disabled={!isPersistedChat || isDeletingChat}
+                aria-label={t?.deleteChatBtn || 'Eliminar chat'}
+                title={t?.deleteChatBtn || 'Eliminar chat'}
+                className="p-2 rounded-full border text-xs transition-all duration-200 active:scale-95 bg-white text-red-600 hover:bg-red-50 border-[#E5E0F5] disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={() =>
@@ -888,7 +1036,7 @@ const handleConfirmBlockUser = () => {
           )}
 
           {/* Mensajes */}
-          <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-white">
+          <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3 bg-white">
             {(activeChat.messages || []).map((m, idx) => {
               if (m.isSystem || m.senderId === 'system') {
                 return (
@@ -917,7 +1065,9 @@ const handleConfirmBlockUser = () => {
                   >
                     <p>{m.text}</p>
                   </div>
-                  <span className="text-[10px] text-[#6B7280] mt-1 px-1 font-medium">{m.time}</span>
+                  <span className="text-[10px] text-[#6B7280] mt-1 px-1 font-medium">
+                    {formatMessageTime(m.sentAt, lang) || m.time}
+                  </span>
                 </div>
               );
             })}
@@ -925,28 +1075,39 @@ const handleConfirmBlockUser = () => {
           </div>
 
           {/* Input para enviar mensaje */}
-          <form onSubmit={sendChatMessage} className="p-3 border-t border-[#E5E0F5] flex gap-2 bg-[#F5F3FF]">
+          <form onSubmit={sendChatMessage} className="shrink-0 p-3 border-t border-[#E5E0F5] flex gap-2 bg-[#F5F3FF]">
             <input
+              ref={chatMessageInputRef}
               type="text"
-              disabled={isCounterpartBlocked}
+              disabled={isCounterpartBlocked || !isPersistedChat}
               placeholder={
                 isCounterpartBlocked
                   ? t?.chatBlockedPlaceholder || 'Este chat está bloqueado.'
+                  : !isPersistedChat
+                    ? t?.chatConnecting || 'Conectando el chat...'
                   : t?.typeMessage || 'Escribí un mensaje...'
               }
               value={chatMessageInput}
-              onChange={(e) => setChatMessageInput(e.target.value)}
+              onChange={(e) => {
+                setChatMessageInput(e.target.value);
+                setMessageError('');
+              }}
               className="flex-1 bg-white border border-[#E5E0F5] disabled:bg-[#F5F3FF] rounded-2xl px-4 py-3 text-xs text-[#18181B] placeholder-[#6B7280]/75 focus:outline-none focus:border-[#5B3DF5] transition-colors"
             />
             <button
               type="submit"
-              disabled={isCounterpartBlocked}
+              disabled={isCounterpartBlocked || !isPersistedChat || isSendingMessage}
               aria-label={t?.send || 'Enviar'}
               className="bg-[#5B3DF5] hover:bg-[#482BD9] disabled:bg-[#E5E0F5] disabled:text-[#6B7280]/60 text-white p-3 rounded-2xl transition-all duration-200 shadow-2xs hover:shadow active:scale-95 flex items-center justify-center shrink-0"
             >
               <Send className="w-4 h-4" />
             </button>
           </form>
+          {messageError && (
+            <p role="alert" className="px-4 pb-3 text-xs text-red-700">
+              {messageError}
+            </p>
+          )}
         </div>
       ) : (
         <div className="space-y-5">

@@ -5,11 +5,18 @@ export default function NavbarInferior({
   setActiveTab,
   proposals = [],
   isLoggedIn = false,
+  currentUserId,
   t,
 }) {
-  // Contamos únicamente las propuestas/conversaciones no leídas cuando hay sesión activa
   const safeProposals = isLoggedIn && Array.isArray(proposals) ? proposals : [];
-  const unreadCount = safeProposals.filter((p) => p && !p.read).length;
+  const unreadCount = safeProposals.filter((proposal) => {
+    if (!proposal) return false;
+    if (proposal.hiddenBy?.[currentUserId]) return false;
+    if (proposal.readBy && currentUserId) {
+      return proposal.readBy[currentUserId] !== true;
+    }
+    return !proposal.read;
+  }).length;
 
   const badgeText = unreadCount > 99 ? '99+' : unreadCount > 0 ? String(unreadCount) : null;
 

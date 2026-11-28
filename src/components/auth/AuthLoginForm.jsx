@@ -119,7 +119,7 @@ export default function AuthLoginForm({
         </label>
         <input
           type="email"
-          autoComplete="email"
+          autoComplete="username"
           placeholder={t?.emailPlaceholder || 'tu@correo.com'}
           value={emailInput}
           disabled={isSubmitting}

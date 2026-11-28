@@ -27,6 +27,30 @@ service cloud.firestore {
         && get(tradePath).data.status in ['pending', 'accepted'];
     }
 
+    function validReadByUpdate() {
+      let otherUid = resource.data.senderId == request.auth.uid
+        ? resource.data.receiverId
+        : resource.data.senderId;
+      let readByChanges = request.resource.data.readBy.diff(
+        resource.data.get('readBy', {})
+      ).affectedKeys();
+      return request.resource.data.readBy is map
+        && readByChanges.hasOnly([request.auth.uid, otherUid])
+        && request.resource.data.readBy[request.auth.uid] == true
+        && (!readByChanges.hasAny([otherUid])
+          || (request.resource.data.diff(resource.data).affectedKeys().hasAny(['messages'])
+            && request.resource.data.readBy[otherUid] == false));
+    }
+
+    function validHiddenByUpdate() {
+      let hiddenByChanges = request.resource.data.hiddenBy.diff(
+        resource.data.get('hiddenBy', {})
+      ).affectedKeys();
+      return request.resource.data.hiddenBy is map
+        && hiddenByChanges.hasOnly([request.auth.uid])
+        && request.resource.data.hiddenBy[request.auth.uid] == true;
+    }
+
     function validPublicProfile() {
       return request.resource.data.keys().hasOnly([
         'name',
@@ -165,6 +189,8 @@ service cloud.firestore {
           'puzzleOfferedTitle',
           'status',
           'read',
+          'readBy',
+          'hiddenBy',
           'createdAt',
           'serverCreatedAt',
           'messages',
@@ -177,6 +203,8 @@ service cloud.firestore {
             && request.resource.data.receiverId == resource.data.receiverId
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'read',
+              'readBy',
+              'hiddenBy',
               'status',
               'completedAt',
               'messages',
@@ -185,6 +213,10 @@ service cloud.firestore {
               'blockedBy',
               'reported'
             ])
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['readBy'])
+              || validReadByUpdate())
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['hiddenBy'])
+              || validHiddenByUpdate())
             && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['messages'])
               || (request.resource.data.messages is list
                 && resource.data.messages is list

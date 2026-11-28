@@ -21,6 +21,7 @@ export default function MainViews({
   favorites,
   proposals,
   setProposals,
+  inboxNavigationVersion,
   blockedUserIds = [],
   onBlockUser,
   onUnblockUser,
@@ -44,6 +45,7 @@ export default function MainViews({
   onRejectTrade,
   onOpenChat,
   onConfirmTrade,
+  lang,
   t,
 }) {
   useEffect(() => {
@@ -130,6 +132,7 @@ export default function MainViews({
 
         {activeTab === 'messages' && (
           <MessagesView
+            key={inboxNavigationVersion}
             proposals={proposals}
             setProposals={setProposals}
             currentUser={currentUser}
@@ -142,6 +145,7 @@ export default function MainViews({
             onClearSelectedProposal={onClearSelectedProposal}
             onConfirmTrade={onConfirmTrade}
             onOpenUserProfile={onOpenUserProfile}
+            lang={lang}
             t={t}
           />
         )}

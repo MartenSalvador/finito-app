@@ -99,6 +99,7 @@ export default function TradeModal({
               sender: senderName,
               text: trimmedMsg,
               time: t?.justNow || 'Ahora',
+              sentAt: Date.now(),
             },
           ]
         : [],

@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from './firebase/config';
+import { uploadImageFile } from './utils/storageHelpers';
 import { translations } from './translations';
 
 import { INITIAL_USERS } from './data/mockUsers';
@@ -30,6 +31,7 @@ import { useAuthAndOnboarding } from './hooks/useAuthAndOnboarding';
 import { useModeration } from './hooks/useModeration';
 import { evaluateUserBadges } from './utils/badgeHelpers';
 import { deleteAccountAndData } from './utils/accountHelpers';
+import { mapFirestoreDocument } from './utils/firestoreIdHelpers';
 import { toPublicProfile } from './utils/profileHelpers';
 
 import Navbar from './components/Navbar';
@@ -58,6 +60,7 @@ export default function App() {
   const [tradeModalPuzzle, setTradeModalPuzzle] = useState(null);
   const [trades, setTrades] = useState(INITIAL_TRADES);
   const [proposals, setProposals] = useState([]);
+  const [inboxNavigationVersion, setInboxNavigationVersion] = useState(0);
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
@@ -70,7 +73,8 @@ export default function App() {
   const handleNavigateTab = (tabId) => {
     setActiveTab(tabId);
     if (tabId === 'messages') {
-      markProposalsRead();
+      setInboxNavigationVersion((version) => version + 1);
+      clearSelectedProposal();
     }
   };
 
@@ -131,7 +135,6 @@ export default function App() {
   const {
     selectedProposalId,
     pendingTradesCount,
-    markProposalsRead,
     clearSelectedProposal,
     resetTradesSessionState,
     createTradeProposal,
@@ -343,8 +346,7 @@ export default function App() {
       proposalsQuery,
       (snapshot) => {
         const firestoreProposals = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...docSnap.data(),
+          ...mapFirestoreDocument(docSnap),
         }));
 
         setProposals(
@@ -576,11 +578,14 @@ export default function App() {
 
   const handleAddCompletedPuzzle = async (newItem) => {
     const ownerId = auth.currentUser?.uid || newItem?.userId || newItem?.ownerId || currentUser?.id || null;
+    const image = newItem?.imageFile
+      ? await uploadImageFile(newItem.imageFile, 'completedPuzzles')
+      : newItem?.image || newItem?.images?.[0] || '';
     const payload = {
       userId: ownerId,
       title: newItem?.title?.trim() || '',
       pieces: Number(newItem?.pieces) || 1000,
-      image: newItem?.image || newItem?.images?.[0] || '',
+      image,
       completedAt: newItem?.completedAt || new Date().toISOString().slice(0, 7),
       note: newItem?.note?.trim() || '',
       createdAt: serverTimestamp(),
@@ -684,6 +689,7 @@ export default function App() {
         favorites={favorites}
         proposals={proposals}
         setProposals={setProposals}
+        inboxNavigationVersion={inboxNavigationVersion}
         selectedProposalId={selectedProposalId}
         onClearSelectedProposal={clearSelectedProposal}
         setTradeModalPuzzle={handleRequestTrade}
@@ -702,6 +708,7 @@ export default function App() {
         onRejectTrade={rejectTrade}
         onConfirmTrade={completeTrade}
         onOpenChat={openChatFromTrade}
+        lang={lang}
         t={t}
         blockedUserIds={blockedUserIds}
         reports={reports}
@@ -731,6 +738,7 @@ export default function App() {
         setActiveTab={handleTabChange}
         proposals={proposals}
         isLoggedIn={isLoggedIn}
+        currentUserId={currentUser?.id}
         t={t}
       />
 

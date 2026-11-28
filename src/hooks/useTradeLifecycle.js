@@ -10,14 +10,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { buildAcceptedTradeProposal } from '../utils/tradeHelpers';
+import { isFirestoreDocId } from '../utils/firestoreIdHelpers';
 
 const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-
-function isFirestoreDocId(id) {
-  if (!id) return false;
-  const str = String(id);
-  return !str.startsWith('tr_') && !str.startsWith('chat_') && !str.startsWith('t');
-}
 
 export function useTradeLifecycle({
   currentUser,
@@ -130,19 +125,6 @@ export function useTradeLifecycle({
       }).length
     : 0;
 
-  const markProposalsRead = useCallback(() => {
-    setProposals((prev) => {
-      prev.forEach((p) => {
-        if (!p.read && isFirestoreDocId(p.id)) {
-          updateDoc(doc(db, 'proposals', p.id), { read: true }).catch((err) =>
-            console.error('Error marcando propuesta leída:', err)
-          );
-        }
-      });
-      return prev.map((p) => ({ ...p, read: true }));
-    });
-  }, [setProposals]);
-
   const clearSelectedProposal = useCallback(() => {
     setSelectedProposalId(null);
   }, []);
@@ -235,8 +217,12 @@ export function useTradeLifecycle({
         (p) => p.tradeId === tradeId || p.id === acceptedTrade.chatProposalId
       );
       if (existingProposal) {
+        const readBy = {
+          ...existingProposal.readBy,
+          [currentUser.id]: true,
+        };
         setProposals((prev) =>
-          prev.map((p) => (p.id === existingProposal.id ? { ...p, read: true } : p))
+          prev.map((p) => (p.id === existingProposal.id ? { ...p, readBy } : p))
         );
         setTrades((prev) =>
           prev.map((tr) =>
@@ -249,8 +235,10 @@ export function useTradeLifecycle({
         setActiveTab('messages');
 
         if (isFirestoreDocId(existingProposal.id)) {
-          updateDoc(doc(db, 'proposals', existingProposal.id), { read: true }).catch(
-            (err) => console.error('Error actualizando lectura de propuesta:', err)
+          updateDoc(doc(db, 'proposals', existingProposal.id), {
+            [`readBy.${currentUser.id}`]: true,
+          }).catch((err) =>
+            console.error('Error actualizando lectura de propuesta:', err)
           );
         }
         if (isFirestoreDocId(tradeId)) {
@@ -336,8 +324,10 @@ export function useTradeLifecycle({
 
       const tempProposalId = builtProposal?.id || `chat_${tradeId}_${Date.now()}`;
 
+      const proposalFields = { ...(builtProposal || {}) };
+      delete proposalFields.id;
       const proposalPayload = {
-        ...(builtProposal || {}),
+        ...proposalFields,
         tradeId,
         senderId,
         senderName,
@@ -351,6 +341,7 @@ export function useTradeLifecycle({
         puzzleOfferedTitle,
         status: 'accepted',
         read: true,
+        readBy: { [currentUser.id]: true },
         createdAt: Date.now(),
         serverCreatedAt: serverTimestamp(),
         messages:
@@ -363,6 +354,7 @@ export function useTradeLifecycle({
                     sender: senderName,
                     text: acceptedTrade.message,
                     time: t?.justNow || 'Hace un momento',
+                    sentAt: Date.now(),
                   },
                 ]
               : [],
@@ -467,19 +459,23 @@ export function useTradeLifecycle({
         (p) => p.id === trade.chatProposalId || p.tradeId === trade.id
       );
       if (matchedProposal) {
+        const readBy = {
+          ...matchedProposal.readBy,
+          [currentUser?.id]: true,
+        };
         setProposals((prev) =>
-          prev.map((p) => (p.id === matchedProposal.id ? { ...p, read: true } : p))
+          prev.map((p) => (p.id === matchedProposal.id ? { ...p, readBy } : p))
         );
         setSelectedProposalId(matchedProposal.id);
         if (isFirestoreDocId(matchedProposal.id)) {
-          updateDoc(doc(db, 'proposals', matchedProposal.id), { read: true }).catch(
-            (err) => console.error('Error marcando chat como leído:', err)
-          );
+          updateDoc(doc(db, 'proposals', matchedProposal.id), {
+            [`readBy.${currentUser?.id}`]: true,
+          }).catch((err) => console.error('Error marcando chat como leído:', err));
         }
       }
       setActiveTab('messages');
     },
-    [proposals, setActiveTab, setProposals]
+    [currentUser?.id, proposals, setActiveTab, setProposals]
   );
 
   const completeTrade = useCallback(
@@ -626,7 +622,6 @@ export function useTradeLifecycle({
     setProposals,
     selectedProposalId,
     pendingTradesCount,
-    markProposalsRead,
     clearSelectedProposal,
     resetTradesSessionState,
     createTradeProposal,

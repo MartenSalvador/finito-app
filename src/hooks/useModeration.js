@@ -131,6 +131,7 @@ export function useModeration({
           'Bloqueaste a {name}. Ya no podrán enviarse mensajes ni nuevas propuestas.'
         ).replace('{name}', targetName),
         time: t?.justNow || 'Hace un momento',
+        sentAt: now,
       };
 
       if (setTrades) {
